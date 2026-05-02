@@ -44,6 +44,25 @@ function formatDateToBR(dateObj) {
   return `${String(dateObj.getDate()).padStart(2, '0')}/${String(dateObj.getMonth() + 1).padStart(2, '0')}/${dateObj.getFullYear()}`;
 }
 
+// Lógica de Viragem da Fatura baseada no dicionário dinâmico
+function getMesFatura(dataTx, bancoStr, dictFechamentos) {
+  if (!dataTx) return null;
+  const banco = safeString(bancoStr);
+  const diaFechamento = dictFechamentos[banco] || 31; // Se não encontrar, assume dia 31
+  
+  let m = dataTx.getMonth();
+  let a = dataTx.getFullYear();
+  
+  if (dataTx.getDate() >= diaFechamento) {
+    m++;
+    if (m > 11) {
+      m = 0;
+      a++;
+    }
+  }
+  return { mes: m, ano: a };
+}
+
 const calcFixa = (vA, taxInput, dataApp) => {
   if (!vA || !dataApp) return { bruto: vA || 0, liquido: vA || 0, ir: 0, lucro: 0 };
   const hoje = new Date();
@@ -95,6 +114,7 @@ export default function Dashboard() {
   const [salarios, setSalarios] = useState([]);
   const [historicoOrdens, setHistoricoOrdens] = useState([]);
   const [meusBancos, setMeusBancos] = useState([]);
+  const [diasFechamento, setDiasFechamento] = useState({}); // Guarda o dicionário dinâmico
   const [cryptoLivePrices, setCryptoLivePrices] = useState({});
   
   const [clienteAtivo, setClienteAtivo] = useState(null);
@@ -134,8 +154,18 @@ export default function Dashboard() {
       if (ordensData?.success) setHistoricoOrdens(ordensData.data || []);
       
       if (bancosData?.success && bancosData.data) {
-        const bl = bancosData.data.map(b => b.dados[0]).filter(b => b && safeString(b).toLowerCase() !== "banco");
+        const bl = [];
+        const dFechamento = {};
+        bancosData.data.forEach(b => {
+           const nome = safeString(b.dados[0]);
+           if (nome && nome.toLowerCase() !== "banco") {
+              bl.push(nome);
+              // Coluna B é o índice 1 na aba meus_bancos
+              dFechamento[nome] = parseInt(b.dados[1]) || 31; 
+           }
+        });
         setMeusBancos(bl.length > 0 ? bl : ['Dinheiro']);
+        setDiasFechamento(dFechamento);
       }
       setSyncStatus('synced');
     } catch (error) { setSyncStatus('error'); }
@@ -192,14 +222,24 @@ export default function Dashboard() {
 
   const abrirEdicao = (item, tipoStr) => { setEditItem(item); setModalType(tipoStr); setIsModalOpen(true); };
 
+  // Filtra os cartões do mês com base na inteligência de fecho dinâmica
+  const cartoesDoMes = gastosCartao.filter(g => {
+    const d = parseDataBR(g.dados[5]);
+    const banco = g.dados[10]; 
+    const fatura = getMesFatura(d, banco, diasFechamento);
+    return fatura && fatura.mes === mesAtual && fatura.ano === anoAtual;
+  });
+
   const calcCaixaLivre = () => {
     let renda = 0; let saida = 0; let lucroCobrança = 0;
     salarios.forEach(s => {
       const d = parseDataBR(s.dados[5]); if (d && d.getMonth() === mesAtual && d.getFullYear() === anoAtual) renda += parseCurrency(s.dados[11]);
     });
-    gastosCartao.forEach(g => {
-      const d = parseDataBR(g.dados[5]); if (d && d.getMonth() === mesAtual && d.getFullYear() === anoAtual) saida += parseCurrency(g.dados[7]);
+    
+    cartoesDoMes.forEach(g => {
+       saida += parseCurrency(g.dados[7]);
     });
+    
     devedores.forEach(dev => {
       const dAcordo = parseDataBR(dev.dados[5]); const vOriginal = parseCurrency(dev.dados[7]); const juros = parseCurrency(dev.dados[10]); const status = safeString(dev.dados[9]);
       const montanteFinal = vOriginal + (vOriginal * (juros/100));
@@ -225,7 +265,7 @@ export default function Dashboard() {
     return (
       <div className="min-h-screen bg-slate-950 text-emerald-500 flex flex-col items-center justify-center font-black">
         <Loader2 className="animate-spin mb-4" size={48} />
-        <p className="tracking-widest uppercase animate-pulse">Carregando Torre de Controle...</p>
+        <p className="tracking-widest uppercase animate-pulse">Carregando a Central Financeira...</p>
       </div>
     );
   }
@@ -245,7 +285,7 @@ export default function Dashboard() {
             {customDialog.type === 'delete' && (
               <>
                 <div className="w-16 h-16 rounded-full bg-red-900/20 text-red-500 flex items-center justify-center mx-auto mb-4"><Trash2 size={32}/></div>
-                <h3 className="text-center text-xl font-black text-white mb-2">Excluir Registro?</h3>
+                <h3 className="text-center text-xl font-black text-white mb-2">Excluir Registo?</h3>
                 <p className="text-center text-sm text-slate-400 mb-6">{customDialog.message}</p>
                 <div className="flex gap-3">
                   <button onClick={() => setCustomDialog(null)} className="flex-1 py-4 rounded-2xl bg-slate-800 text-slate-300 font-bold uppercase text-xs active:scale-95">Cancelar</button>
@@ -275,12 +315,12 @@ export default function Dashboard() {
       </header>
 
       <div className="p-4 max-w-2xl mx-auto space-y-6">
-        {activeTab === 'dashboard' && <ResumoView dadosCaixa={dadosCaixa} salarios={salarios} hist={historicoOrdens} mes={mesAtual} ano={anoAtual} onEdit={i => abrirEdicao(i, 'salario')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdRendas', linha: l, message: 'Isso apagará o lançamento do histórico.' })} />}
+        {activeTab === 'dashboard' && <ResumoView dadosCaixa={dadosCaixa} salarios={salarios} hist={historicoOrdens} mes={mesAtual} ano={anoAtual} onEdit={i => abrirEdicao(i, 'salario')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdRendas', linha: l, message: 'Isto irá apagar o lançamento do histórico.' })} />}
         {activeTab === 'patrimonio' && !carteiraDetalhe && <CarteiraView ativosVar={ativosVariaveis} hist={historicoOrdens} ativosFixos={ativosFixos} liveCrypto={cryptoLivePrices} onAbrirDetalhe={setCarteiraDetalhe} />}
         {activeTab === 'patrimonio' && carteiraDetalhe && <CarteiraDetalheView tipo={carteiraDetalhe} ativosVar={ativosVariaveis} hist={historicoOrdens} ativosFixos={ativosFixos} liveCrypto={cryptoLivePrices} onVoltar={() => setCarteiraDetalhe(null)} onEdit={i => abrirEdicao(i, 'ativo')} onDelete={(l, a) => setCustomDialog({ type: 'delete', aba: a, linha: l, message: 'A operação será apagada do histórico.' })} />}
         {activeTab === 'devedores' && !clienteAtivo && <DevedoresView items={devedores} onAbrirCliente={setClienteAtivo} />}
         {activeTab === 'devedores' && clienteAtivo && <ClienteDossieView nome={clienteAtivo} items={devedores} onVoltar={() => setClienteAtivo(null)} onStatusChange={(i, s) => handleGravarDados([i.dados[5], i.dados[6], i.dados[7], i.dados[8], s, i.dados[10], i.dados[11]], 'bdDevedores', i.linha)} onEdit={i => abrirEdicao(i, 'devedor')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdDevedores', linha: l, message: 'A dívida será apagada permanentemente.' })} onRolar={(item, totalAtual) => setCustomDialog({ type: 'rolar', item, totalAtual })} />}
-        {activeTab === 'cartoes' && <CartoesView items={gastosCartao} onEdit={i => abrirEdicao(i, 'cartao')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdLancamentos', linha: l, message: 'A despesa sumirá da fatura.' })} />}
+        {activeTab === 'cartoes' && <CartoesView items={cartoesDoMes} onEdit={i => abrirEdicao(i, 'cartao')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdLancamentos', linha: l, message: 'A despesa desaparecerá da fatura.' })} />}
       </div>
 
       <nav className="fixed bottom-0 w-full bg-slate-950/95 backdrop-blur-2xl border-t border-slate-800/50 flex justify-around items-center p-3 z-50 pb-safe">
@@ -319,7 +359,7 @@ function ResumoView({ dadosCaixa, salarios, hist, mes, ano, onEdit, onDelete }) 
       </div>
       
       <h3 className="text-xs font-black text-slate-500 uppercase ml-1">Rendas & Salários</h3>
-      {filtrados.length === 0 ? <p className="text-xs text-slate-600 italic">Sem registros neste mês.</p> : filtrados.map((item, idx) => (
+      {filtrados.length === 0 ? <p className="text-xs text-slate-600 italic">Sem registos neste mês.</p> : filtrados.map((item, idx) => (
         <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center">
           <div className="flex gap-4 items-center"><div className="w-10 h-10 rounded-2xl bg-blue-500/10 text-blue-400 flex items-center justify-center"><Banknote size={18}/></div><div><p className="text-sm font-black">Salário / Recebimento</p><p className="text-[9px] text-slate-500 uppercase">{formatDateToBR(parseDataBR(item.dados[5]))}</p></div></div>
           <div className="flex items-center gap-4"><p className="text-sm font-black text-blue-400">R$ {parseCurrency(item.dados[11]).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
@@ -371,7 +411,7 @@ function CarteiraView({ ativosVar, hist, ativosFixos, liveCrypto, onAbrirDetalhe
   const provFIIs = fiis.reduce((acc, i) => acc + parseCurrency(i.dados[11]), 0);
   
   const totalFixa = ativosFixos.reduce((acc, i) => {
-    const rf = calcFixa(parseCurrency(i.dados[7]), parseCurrency(i.dados[8]), parseDataBR(i.dados[5]));
+    const rf = calcFixa(parseCurrency(i.dados[8]), parseCurrency(i.dados[9]), parseDataBR(i.dados[5]));
     return acc + rf.liquido;
   }, 0);
 
@@ -436,7 +476,7 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, liveCrypto, o
         <div className="mb-4 bg-slate-900/50 p-4 rounded-2xl border border-slate-800 flex items-start gap-3">
           <Info size={20} className="text-blue-500 shrink-0 mt-0.5"/> 
           <p className="text-[10px] text-slate-400 leading-relaxed font-bold">
-            Para proteger suas fórmulas automáticas de cotação da B3, altere Ações e FIIs diretamente na sua planilha (Aba DB_Investimentos_Variaveis).
+            Para proteger as fórmulas automáticas de cotação da B3, altere Ações e FIIs diretamente na folha de cálculo (Aba DB_Investimentos_Variaveis).
           </p>
         </div>
       )}
@@ -444,19 +484,22 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, liveCrypto, o
       {lista.length === 0 ? <p className="text-xs text-slate-600 italic">Nenhum ativo listado.</p> : lista.map((i, idx) => {
           if(isF) {
             const dataApp = parseDataBR(i.dados[5]); const dataVenc = parseDataBR(i.dados[6]);
-            const vA = parseCurrency(i.dados[7]); const taxa = parseCurrency(i.dados[8]);
+            const nome = i.dados[7]; 
+            const vA = parseCurrency(i.dados[8]); 
+            const taxa = parseCurrency(i.dados[9]);
+            const subTipo = i.dados[10] || 'CDB';
             const calc = calcFixa(vA, taxa, dataApp);
             
             return (
               <div key={idx} className="p-5 bg-slate-900 border border-slate-800 rounded-[2rem]">
                 <div className="flex justify-between items-start mb-4">
-                  <div><p className="font-black text-lg uppercase text-slate-100">{i.dados[2]}</p><p className="text-[10px] font-bold text-slate-500 uppercase">{i.dados[4]} • Taxa: {i.dados[8]} {taxa > 20 ? '% CDI' : '% a.m'}</p></div>
+                  <div><p className="font-black text-lg uppercase text-slate-100">{nome}</p><p className="text-[10px] font-bold text-slate-500 uppercase">{subTipo} • Taxa: {taxa} {taxa > 20 ? '% CDI' : '% a.m'}</p></div>
                   <div className="flex gap-2"><button onClick={() => onEdit(i)} className="bg-slate-800 p-3 rounded-xl text-blue-400 active:scale-90"><Edit size={20}/></button><button onClick={() => onDelete(i.linha, 'DB_Investimentos_Fixos')} className="bg-slate-800 p-3 rounded-xl text-red-400 active:scale-90"><Trash2 size={20}/></button></div>
                 </div>
                 <div className="grid grid-cols-2 gap-4 border-t border-slate-800 pt-4 mt-2">
                   <div><p className="text-[8px] font-black text-slate-500 uppercase">Aplicado em {formatDateToBR(dataApp)}</p><p className="text-sm font-black text-slate-300">R$ {vA.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Juros Bruto / Rendimento</p><p className="text-sm font-black text-blue-400">+R$ {calc.lucro.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-                  <div><p className="text-[8px] font-black text-slate-500 uppercase">Imposto de Renda Retido</p><p className="text-sm font-black text-red-400">-R$ {calc.ir.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Juros (Bruto)</p><p className="text-sm font-black text-blue-400">+R$ {calc.lucro.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+                  <div><p className="text-[8px] font-black text-slate-500 uppercase">Retenção na Fonte (IR)</p><p className="text-sm font-black text-red-400">-R$ {calc.ir.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
                   <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Líquido Disponível</p><p className="text-sm font-black text-emerald-400">R$ {calc.liquido.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
                   {dataVenc && (
                     <div className="col-span-2 pt-2 border-t border-slate-800/50 mt-2"><p className="text-[8px] font-black text-slate-500 uppercase">Data de Vencimento</p><p className="text-xs font-black text-amber-500">{formatDateToBR(dataVenc)}</p></div>
@@ -690,7 +733,7 @@ function CartoesView({ items, onEdit, onDelete }) {
         </div>
       </div>
       <h3 className="text-xs font-black text-slate-500 uppercase ml-1">Lançamentos Individuais</h3>
-      {items.length === 0 ? <p className="text-xs text-slate-600 italic">Sem registros.</p> : items.map((i, idx) => (
+      {items.length === 0 ? <p className="text-xs text-slate-600 italic">Sem registos.</p> : items.map((i, idx) => (
         <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center">
           <div className="flex gap-4 items-center"><div className="w-10 h-10 rounded-2xl border border-indigo-500/20 flex items-center justify-center text-indigo-400"><CreditCard size={18}/></div><div><p className="text-sm font-black">{i.dados[8]}</p><p className="text-[9px] text-slate-500 uppercase">{i.dados[10]} • {i.dados[9]}</p></div></div>
           <div className="flex items-center gap-4">
@@ -707,7 +750,7 @@ function CartoesView({ items, onEdit, onDelete }) {
 }
 
 function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem }) {
-  const [formData, setFormData] = useState({ data: new Date().toISOString().split('T')[0], dataVenc: new Date().toISOString().split('T')[0], banco: meusBancos[0] || 'Dinheiro', ativoTipo: 'Renda Fixa', subTipo: 'CDB', nome: '', valor: '', juros: '', he50: '', he100: '', dsr: '', adNoturno: '', outros: '', descontos: '', isFixo: false, categoria: '' });
+  const [formData, setFormData] = useState({ data: new Date().toISOString().split('T')[0], dataVenc: new Date().toISOString().split('T')[0], banco: meusBancos[0] || 'Dinheiro', ativoTipo: 'Ação', subTipo: 'CDB', nome: '', valor: '', juros: '', he50: '', he100: '', dsr: '', adNoturno: '', outros: '', descontos: '', isFixo: false, categoria: '' });
   
   useEffect(() => {
     if (editItem) {
@@ -727,7 +770,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
   return (
     <div className="fixed inset-0 bg-black/95 backdrop-blur-md z-[100] flex items-end md:items-center justify-center p-4">
       <div className="bg-slate-900 w-full max-w-md rounded-[3rem] border border-slate-800 p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
-        <div className="flex justify-between items-center mb-8"><h3 className="font-black text-xl text-emerald-500">{editItem ? `Editar ${tipo}` : 'Novo Lançamento'}</h3><button onClick={onClose} className="p-3 bg-slate-800 rounded-full text-slate-500"><X size={24}/></button></div>
+        <div className="flex justify-between items-center mb-8"><h3 className="font-black text-xl text-emerald-500">{editItem ? `Editar ${tipo}` : 'Novo'}</h3><button onClick={onClose} className="p-3 bg-slate-800 rounded-full text-slate-500"><X size={24}/></button></div>
         {tipo === 'escolha' ? (
           <div className="grid grid-cols-2 gap-3"><ChoiceBtn onClick={() => setTipo('salario')} icon={<Banknote size={32} className="text-blue-400"/>} label="Salário" /><ChoiceBtn onClick={() => setTipo('cartao')} icon={<CreditCard size={32} className="text-indigo-400"/>} label="Gastos" /><ChoiceBtn onClick={() => setTipo('ativo')} icon={<Wallet size={32} className="text-emerald-400"/>} label="Ativos" /><ChoiceBtn onClick={() => setTipo('devedor')} icon={<Users size={32} className="text-amber-400"/>} label="Devedor" /><ChoiceBtn onClick={() => setTipo('provento')} icon={<Coins size={32} className="text-yellow-400"/>} label="Receber Provento" /></div>
         ) : (
@@ -809,7 +852,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
                </div>
             )}
             
-            <button type="submit" className="w-full bg-emerald-600 text-white py-6 rounded-3xl font-black uppercase tracking-widest text-xs mt-4 active:scale-95 transition-all">{editItem ? "Atualizar Registro" : "Salvar Lançamento"}</button>
+            <button type="submit" className="w-full bg-emerald-600 text-white py-6 rounded-3xl font-black uppercase tracking-widest text-xs mt-4 active:scale-95 transition-all">{editItem ? "Atualizar Registo" : "Salvar Lançamento"}</button>
           </form>
         )}
       </div>
