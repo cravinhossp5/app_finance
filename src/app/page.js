@@ -4,11 +4,22 @@ import { useState, useEffect } from 'react';
 import { 
   TrendingUp, LayoutDashboard, Receipt, Users, PlusCircle, Landmark, X, CheckCircle, 
   ChevronLeft, ChevronRight, CreditCard, HandCoins, Loader2, AlertCircle, RefreshCw, 
-  Building2, Wallet, Coins, Briefcase, CalendarClock, ChevronDown, Banknote, PieChart
+  Building2, Wallet, Coins, Briefcase, CalendarClock, ChevronDown, Banknote, PieChart,
+  History, ArrowLeft
 } from 'lucide-react';
 
+// ==========================================
+// CONFIGURAÇÃO DOS CARTÕES (AJUSTE COM SEUS DIAS)
+// ==========================================
+const CONFIG_CARTOES = {
+  'Inter': { fechamento: 10, vencimento: 15 },
+  'Nubank': { fechamento: 25, vencimento: 2 },
+  'C6Bank': { fechamento: 20, vencimento: 25 },
+  'Dinheiro': null // Ignora lógica de fatura
+};
+
 export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState('dashboard'); // Começa no Resumo
+  const [activeTab, setActiveTab] = useState('dashboard'); 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalType, setModalType] = useState(''); 
   const [isLoading, setIsLoading] = useState(true);
@@ -25,6 +36,9 @@ export default function Dashboard() {
   const [devedores, setDevedores] = useState([]);
   const [meusBancos, setMeusBancos] = useState([]);
   const [salarios, setSalarios] = useState([]);
+
+  // Estado para abrir o Histórico do Cliente
+  const [clienteAtivo, setClienteAtivo] = useState(null);
 
   const showToast = (message, type = 'success') => {
     setNotification({ message, type });
@@ -50,7 +64,7 @@ export default function Dashboard() {
         fetchData('bdLancamentos'),
         fetchData('bdDevedores'),
         fetchData('meus_bancos'),
-        fetchData('bdRendas') // Lendo a nova aba de Salários
+        fetchData('bdRendas') 
       ]);
 
       if (varData?.success) setAtivosVariaveis(varData.data || []);
@@ -59,10 +73,9 @@ export default function Dashboard() {
       if (devData?.success) setDevedores(devData.data || []);
       if (salarioData?.success) setSalarios(salarioData.data || []);
       
-      // Filtra os bancos ignorando a linha de cabeçalho
       if (bancosData?.success) {
         const bancosLimpos = bancosData.data.map(b => b.dados[0]).filter(b => b && b !== "Banco");
-        setMeusBancos(bancosLimpos.length > 0 ? bancosLimpos : ['Inter', 'Nubank']);
+        setMeusBancos(bancosLimpos.length > 0 ? bancosLimpos : Object.keys(CONFIG_CARTOES));
       }
       
       setSyncStatus('synced');
@@ -99,16 +112,104 @@ export default function Dashboard() {
     }
   };
 
-  // Funções Auxiliares de Cálculo para o Resumo
-  const calcTotalInvestido = () => {
-    // Agora lê direto da Coluna E (dados[4]) da sua planilha para o custo exato
-    const varTotal = ativosVariaveis.reduce((acc, item) => acc + (parseFloat(item.dados[4]) || 0), 0);
-    const fixoTotal = ativosFixos.reduce((acc, item) => acc + (parseFloat(item.dados[5]) || 0), 0);
-    return varTotal + fixoTotal;
+  const handleAtualizarDevedor = async (item, novoStatus) => {
+    setSyncStatus('syncing');
+    showToast(`Atualizando status...`, "info");
+    try {
+      const payload = [
+        item.dados[5],  // Data Acordo
+        item.dados[6],  // Nome
+        item.dados[7],  // Valor Total
+        item.dados[8],  // Data Pgto Combinada
+        novoStatus,     // Motivo (Pendente/Concluído)
+        item.dados[10], // Juros
+        item.dados[11]  // Obs
+      ];
+
+      const res = await fetch('/api/proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'atualizar', aba: 'bdDevedores', linha: item.linha, payload })
+      });
+      
+      const result = await res.json();
+      if (result.success) {
+        showToast(`Dívida ${novoStatus}!`);
+        fetchDados(true);
+      } else throw new Error();
+    } catch (e) {
+      setSyncStatus('error');
+      showToast("Erro ao atualizar.", "error");
+    }
   };
-  const calcTotalFatura = () => gastosCartao.reduce((acc, curr) => acc + (parseFloat(curr?.dados?.[2]) || 0), 0);
-  const calcTotalReceber = () => devedores.filter(i => i.dados[9] !== 'Concluído').reduce((acc, item) => acc + (parseFloat(item.dados[7]) || 0), 0);
-  const calcSalarioMes = () => salarios.reduce((acc, item) => acc + (parseFloat(item.dados[9]) || 0), 0); // Líquido na Coluna J (Dados[9])
+
+  const handlePagarFatura = async (item) => {
+    setSyncStatus('syncing');
+    showToast(`Marcando como Paga...`, "info");
+    try {
+      const payload = [
+        item.dados[5], // Categoria
+        item.dados[6], // Banco
+        item.dados[7], // Valor
+        item.dados[8], // Data
+        "Paga"         // Coluna J (Adicione "Status Pagamento" na Col J de bdLancamentos)
+      ];
+      const res = await fetch('/api/proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'atualizar', aba: 'bdLancamentos', linha: item.linha, payload })
+      });
+      if ((await res.json()).success) {
+        showToast(`Despesa Paga!`);
+        fetchDados(true);
+      } else throw new Error();
+    } catch (e) {
+      setSyncStatus('error');
+      showToast("Erro ao atualizar fatura.", "error");
+    }
+  };
+
+  // --- MATEMÁTICA TEMPORAL (CAIXA LIVRE REAL) ---
+  const calcCaixaLivre = () => {
+    let rendaMes = 0; let gastoMes = 0; let investimentoMes = 0; let emprestadoMes = 0; let recebidoMes = 0;
+
+    // Renda do Mês
+    salarios.forEach(s => {
+      const d = parseDataBR(s.dados[5]);
+      if (d.getMonth() === mesAtual && d.getFullYear() === anoAtual) rendaMes += (parseFloat(s.dados[9]) || 0);
+    });
+
+    // Gastos do Mês
+    gastosCartao.forEach(g => {
+      const d = parseDataBR(g.dados[8]);
+      if (d.getMonth() === mesAtual && d.getFullYear() === anoAtual) gastoMes += (parseFloat(g.dados[7]) || 0);
+    });
+
+    // Investimentos do Mês (Dinheiro que saiu da conta pra corretora)
+    ativosVariaveis.forEach(a => {
+      const d = parseDataBR(a.dados[5]); // Assumindo Data na F
+      const tipoOp = a.dados[6]?.toUpperCase(); // Assumindo Tipo_Op na G
+      const valor = parseFloat(a.dados[4]) || 0; // Custo na E
+      if (d.getMonth() === mesAtual && d.getFullYear() === anoAtual) {
+        if (tipoOp === 'COMPRA') investimentoMes += valor;
+        if (tipoOp === 'VENDA') rendaMes += valor; // Volta pro caixa
+      }
+    });
+
+    // Empréstimos (Saiu e Voltou)
+    devedores.forEach(dev => {
+      const dAcordo = parseDataBR(dev.dados[5]);
+      const valorOriginal = parseFloat(dev.dados[7]) || 0;
+      const status = dev.dados[9];
+      const pago = parseFloat(dev.dados[3]) || 0; // Col D lida da planilha
+      
+      if (dAcordo.getMonth() === mesAtual && dAcordo.getFullYear() === anoAtual) emprestadoMes += valorOriginal;
+      if (status === 'Concluído' && dAcordo.getMonth() === mesAtual) recebidoMes += pago; // Simplificação: assume que recebeu no mesmo mês ou ajustar pela data de baixa
+    });
+
+    const caixaLivre = rendaMes + recebidoMes - gastoMes - investimentoMes - emprestadoMes;
+    return { renda: rendaMes + recebidoMes, saida: gastoMes + investimentoMes + emprestadoMes, livre: caixaLivre };
+  };
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50 pb-28 font-sans relative overflow-x-hidden selection:bg-emerald-500/30">
@@ -116,11 +217,9 @@ export default function Dashboard() {
       {notification && (
         <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-[200] px-6 py-4 rounded-[1.5rem] shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-top-4 duration-500 border w-[90%] max-w-sm ${
           notification.type === 'success' ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-400' : 
-          notification.type === 'info' ? 'bg-blue-950/90 border-blue-500/50 text-blue-400' :
-          'bg-red-950/90 border-red-500/50 text-red-400'
+          notification.type === 'info' ? 'bg-blue-950/90 border-blue-500/50 text-blue-400' : 'bg-red-950/90 border-red-500/50 text-red-400'
         }`}>
-          {notification.type === 'success' ? <CheckCircle size={20}/> : 
-           notification.type === 'info' ? <Loader2 size={20} className="animate-spin"/> : <AlertCircle size={20}/>}
+          {notification.type === 'success' ? <CheckCircle size={20}/> : notification.type === 'info' ? <Loader2 size={20} className="animate-spin"/> : <AlertCircle size={20}/>}
           <span className="font-bold text-sm">{notification.message}</span>
         </div>
       )}
@@ -132,33 +231,27 @@ export default function Dashboard() {
             {syncStatus === 'syncing' && <Loader2 className="text-blue-500 animate-spin" size={14}/>}
           </div>
           <div className="flex items-center gap-3 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase shadow-inner">
-            <button onClick={() => setMesAtual(prev => prev === 0 ? 11 : prev - 1)} className="p-1 hover:text-emerald-500"><ChevronLeft size={16}/></button>
-            <span className="min-w-[80px] text-center text-slate-300 tracking-widest">{meses[mesAtual]}</span>
-            <button onClick={() => setMesAtual(prev => prev === 11 ? 0 : prev + 1)} className="p-1 hover:text-emerald-500"><ChevronRight size={16}/></button>
+            <button onClick={() => { setMesAtual(prev => prev === 0 ? 11 : prev - 1); if(mesAtual===0) setAnoAtual(p=>p-1); }} className="p-1 hover:text-emerald-500"><ChevronLeft size={16}/></button>
+            <span className="min-w-[80px] text-center text-slate-300 tracking-widest">{meses[mesAtual]} {anoAtual}</span>
+            <button onClick={() => { setMesAtual(prev => prev === 11 ? 0 : prev + 1); if(mesAtual===11) setAnoAtual(p=>p+1); }} className="p-1 hover:text-emerald-500"><ChevronRight size={16}/></button>
           </div>
         </div>
       </header>
 
       <div className="p-4 max-w-2xl mx-auto space-y-6">
-        {activeTab === 'dashboard' && (
-          <ResumoView 
-            patrimonio={calcTotalInvestido()} 
-            fatura={calcTotalFatura()} 
-            receber={calcTotalReceber()} 
-            renda={calcSalarioMes()} 
-          />
-        )}
+        {activeTab === 'dashboard' && <ResumoView dadosCaixa={calcCaixaLivre()} />}
         {activeTab === 'patrimonio' && <CarteiraView ativosVar={ativosVariaveis} ativosFixos={ativosFixos} />}
-        {activeTab === 'devedores' && <DevedoresView items={devedores} />}
-        {activeTab === 'cartoes' && <CartoesView items={gastosCartao} mes={meses[mesAtual]} />}
+        {activeTab === 'devedores' && !clienteAtivo && <DevedoresView items={devedores} onAbrirCliente={setClienteAtivo} />}
+        {activeTab === 'devedores' && clienteAtivo && <ClienteDossieView nome={clienteAtivo} items={devedores} onVoltar={() => setClienteAtivo(null)} onStatusChange={handleAtualizarDevedor} />}
+        {activeTab === 'cartoes' && <CartoesView items={gastosCartao} onPagar={handlePagarFatura} />}
       </div>
 
       <nav className="fixed bottom-0 w-full bg-slate-950/95 backdrop-blur-2xl border-t border-slate-800/50 flex justify-around items-center p-3 z-50 pb-safe">
-        <NavButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon={<PieChart size={22} />} label="Resumo" />
-        <NavButton active={activeTab === 'patrimonio'} onClick={() => setActiveTab('patrimonio')} icon={<Briefcase size={22} />} label="Carteira" />
+        <NavButton active={activeTab === 'dashboard'} onClick={() => {setActiveTab('dashboard'); setClienteAtivo(null);}} icon={<PieChart size={22} />} label="Resumo" />
+        <NavButton active={activeTab === 'patrimonio'} onClick={() => {setActiveTab('patrimonio'); setClienteAtivo(null);}} icon={<Briefcase size={22} />} label="Carteira" />
         <button onClick={() => { setModalType('escolha'); setIsModalOpen(true); }} className="bg-emerald-600 text-white p-4 rounded-[1.7rem] shadow-lg shadow-emerald-900/40 -translate-y-6 border-4 border-slate-950 active:scale-90 transition-all"><PlusCircle size={28} /></button>
         <NavButton active={activeTab === 'devedores'} onClick={() => setActiveTab('devedores')} icon={<Users size={22} />} label="Cobranças" />
-        <NavButton active={activeTab === 'cartoes'} onClick={() => setActiveTab('cartoes')} icon={<CreditCard size={22} />} label="Cartões" />
+        <NavButton active={activeTab === 'cartoes'} onClick={() => {setActiveTab('cartoes'); setClienteAtivo(null);}} icon={<CreditCard size={22} />} label="Cartões" />
       </nav>
 
       {isModalOpen && <LancamentoModal tipo={modalType} setTipo={setModalType} onClose={() => setIsModalOpen(false)} onSave={handleSalvar} meusBancos={meusBancos} />}
@@ -166,35 +259,32 @@ export default function Dashboard() {
   );
 }
 
-// ==========================================
-// VIEW: RESUMO (DASHBOARD)
-// ==========================================
-function ResumoView({ patrimonio, fatura, receber, renda }) {
-  const saldoLivre = renda + receber - fatura;
+// --- FUNÇÕES AUXILIARES ---
+function parseDataBR(dataStr) {
+  if (!dataStr) return new Date();
+  if (dataStr.includes('/')) {
+    const [dia, mes, ano] = dataStr.split('/');
+    return new Date(ano, mes - 1, dia);
+  }
+  return new Date(dataStr);
+}
 
+// ==========================================
+// VIEW: RESUMO (DRE DE CAIXA REAL)
+// ==========================================
+function ResumoView({ dadosCaixa }) {
   return (
     <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/20 p-8 rounded-[2.5rem] shadow-xl relative overflow-hidden">
         <div className="absolute -top-10 -right-10 p-6 opacity-5 text-emerald-500"><PieChart size={150}/></div>
         <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-1">Caixa Livre (Mês)</p>
-        <p className="text-4xl font-black text-white tracking-tighter">R$ {saldoLivre.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+        <p className={`text-4xl font-black tracking-tighter ${dadosCaixa.livre >= 0 ? 'text-white' : 'text-red-400'}`}>
+          R$ {dadosCaixa.livre.toLocaleString('pt-BR', {minimumFractionDigits: 2})}
+        </p>
         
         <div className="mt-6 flex flex-wrap gap-4 text-xs font-bold text-slate-400">
-          <div className="flex flex-col"><span className="text-[9px] uppercase tracking-widest text-slate-500">Renda Mensal</span><span className="text-blue-400">+ R$ {renda.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span></div>
-          <div className="flex flex-col"><span className="text-[9px] uppercase tracking-widest text-slate-500">Fatura Cartões</span><span className="text-red-400">- R$ {fatura.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span></div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div className="bg-slate-900 border border-slate-800 p-5 rounded-[2rem]">
-          <div className="mb-3 text-emerald-400"><Briefcase size={20}/></div>
-          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Patrimônio</p>
-          <p className="text-lg font-black text-slate-200 tracking-tight">R$ {patrimonio.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-        </div>
-        <div className="bg-slate-900 border border-slate-800 p-5 rounded-[2rem]">
-          <div className="mb-3 text-amber-400"><Users size={20}/></div>
-          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">A Receber</p>
-          <p className="text-lg font-black text-slate-200 tracking-tight">R$ {receber.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+          <div className="flex flex-col"><span className="text-[9px] uppercase tracking-widest text-slate-500">Entradas Totais</span><span className="text-blue-400">+ R$ {dadosCaixa.renda.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span></div>
+          <div className="flex flex-col"><span className="text-[9px] uppercase tracking-widest text-slate-500">Saídas (Gastos/Ativos/Emp)</span><span className="text-red-400">- R$ {dadosCaixa.saida.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span></div>
         </div>
       </div>
     </div>
@@ -202,17 +292,14 @@ function ResumoView({ patrimonio, fatura, receber, renda }) {
 }
 
 // ==========================================
-// VIEW: CARTEIRA (AÇÕES, FIIS, CRIPTO E FIXA)
+// VIEW: CARTEIRA 
 // ==========================================
 function CarteiraView({ ativosVar, ativosFixos }) {
   const acoes = ativosVar.filter(a => a.dados[1]?.toUpperCase().includes('AÇÃO'));
   const fiis = ativosVar.filter(a => a.dados[1]?.toUpperCase().includes('FII'));
   const cripto = ativosVar.filter(a => a.dados[1]?.toUpperCase().includes('CRIPTO'));
 
-  // Custo Total lido da Coluna E (dados[4]) da sua planilha
   const calcularTotalPago = (lista) => lista.reduce((acc, item) => acc + (parseFloat(item.dados[4]) || 0), 0);
-  
-  // Lucro lido da Coluna H (dados[7]) e Proventos (se houver no futuro) da Coluna L (dados[11])
   const calcularLucroPlanilha = (lista) => lista.reduce((acc, item) => acc + (parseFloat(item.dados[7]) || 0), 0);
   const calcularProventosPlanilha = (lista) => lista.reduce((acc, item) => acc + (parseFloat(item.dados[11]) || 0), 0);
 
@@ -220,25 +307,19 @@ function CarteiraView({ ativosVar, ativosFixos }) {
   const totalFiis = calcularTotalPago(fiis);
   const totalCripto = calcularTotalPago(cripto);
   const totalFixa = ativosFixos.reduce((acc, item) => acc + (parseFloat(item.dados[5]) || 0), 0);
-  
   const totalGeral = totalAcoes + totalFiis + totalCripto + totalFixa;
-  
   const lucroEstimado = calcularLucroPlanilha(ativosVar);
   const proventosEstimados = calcularProventosPlanilha(ativosVar);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="bg-emerald-900/20 border border-emerald-500/20 p-8 rounded-[2.5rem] shadow-xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 p-6 opacity-10 text-emerald-500"><Landmark size={100}/></div>
         <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-1">Total Investido (Custo)</p>
         <p className="text-4xl font-black text-white tracking-tighter">R$ {totalGeral.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-        
         <div className="mt-6 flex flex-wrap gap-4 text-xs font-bold text-slate-400">
           <div className="flex flex-col">
-            <span className="text-[9px] uppercase tracking-widest text-slate-500">Lucro Atual</span>
-            <span className={lucroEstimado >= 0 ? "text-emerald-400" : "text-red-400"}>
-              {lucroEstimado >= 0 ? '+' : ''} R$ {lucroEstimado.toLocaleString('pt-BR', {minimumFractionDigits: 2})}
-            </span>
+            <span className="text-[9px] uppercase tracking-widest text-slate-500">Lucro Atual (Via B3)</span>
+            <span className={lucroEstimado >= 0 ? "text-emerald-400" : "text-red-400"}>{lucroEstimado >= 0 ? '+' : ''} R$ {lucroEstimado.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>
           </div>
           <div className="flex flex-col">
             <span className="text-[9px] uppercase tracking-widest text-slate-500">Proventos a Receber</span>
@@ -246,7 +327,6 @@ function CarteiraView({ ativosVar, ativosFixos }) {
           </div>
         </div>
       </div>
-
       <div className="grid grid-cols-2 gap-3">
         <InfoCard icon={<TrendingUp size={16}/>} title="Ações" value={totalAcoes} color="text-indigo-400" />
         <InfoCard icon={<Building2 size={16}/>} title="FIIs" value={totalFiis} color="text-violet-400" />
@@ -268,109 +348,174 @@ function InfoCard({ icon, title, value, color }) {
 }
 
 // ==========================================
-// VIEW: COBRANÇAS E DEVEDORES 
+// VIEW: COBRANÇAS (AGRUPADO POR CLIENTE)
 // ==========================================
-function DevedoresView({ items }) {
-  const calcularMetricas = () => {
-    let emprestado = 0; let recebido = 0;
-    items.forEach(item => {
-      emprestado += (parseFloat(item.dados[7]) || 0); 
-      recebido += (parseFloat(item.dados[3]) || 0);   
-    });
-    return { emprestado, recebido, lucro: recebido - emprestado };
-  };
-  const metricas = calcularMetricas();
+function DevedoresView({ items, onAbrirCliente }) {
+  // Agrupa por nome
+  const clientesObj = {};
+  items.forEach(item => {
+    const nome = item.dados[6] || 'Sem Nome';
+    if (!clientesObj[nome]) clientesObj[nome] = { nome, totalEmprestado: 0, totalPago: 0, dividasAtivas: 0 };
+    
+    clientesObj[nome].totalEmprestado += (parseFloat(item.dados[7]) || 0);
+    clientesObj[nome].totalPago += (parseFloat(item.dados[3]) || 0);
+    if (item.dados[9] !== 'Concluído') clientesObj[nome].dividasAtivas += 1;
+  });
+
+  const clientesList = Object.values(clientesObj).sort((a,b) => b.dividasAtivas - a.dividasAtivas);
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="bg-amber-600/10 border border-amber-500/20 p-8 rounded-[2.5rem] shadow-xl">
-        <p className="text-[10px] font-black text-amber-500 uppercase tracking-widest mb-2">Total na Rua (Principal)</p>
-        <p className="text-4xl font-black text-white tracking-tighter">R$ {metricas.emprestado.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-        
-        <div className="grid grid-cols-2 gap-4 mt-6 pt-6 border-t border-amber-500/20">
-          <div>
-            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Já Recebido</p>
-            <p className="text-lg font-black text-emerald-400">R$ {metricas.recebido.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-          </div>
-          <div>
-            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Lucro Total</p>
-            <p className={`text-lg font-black ${metricas.lucro >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
-              R$ {metricas.lucro.toLocaleString('pt-BR', {minimumFractionDigits: 2})}
-            </p>
-          </div>
-        </div>
-      </div>
-      <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1">Carteira de Clientes</h3>
-      {items.length === 0 ? <p className="text-xs text-slate-600 italic">Nenhuma cobrança ativa.</p> : items.map((item, idx) => <DevedorCard key={idx} item={item} />)}
-    </div>
-  );
-}
-
-function DevedorCard({ item }) {
-  const nome = item.dados[6] || 'Sem Nome'; 
-  const valorOriginal = parseFloat(item.dados[7]) || 0; 
-  const totalPago = parseFloat(item.dados[3]) || 0; 
-  const saldoDevedor = parseFloat(item.dados[4]) || valorOriginal; 
-  const status = item.dados[9] || 'Pendente'; 
-  const isConcluido = status === 'Concluído';
-
-  return (
-    <div className={`p-5 rounded-[2rem] border transition-all ${isConcluido ? 'bg-slate-900/40 border-slate-800 opacity-60' : 'bg-slate-900 border-amber-900/30 shadow-lg shadow-black/20'}`}>
-      <div className="flex justify-between items-start mb-4">
-        <div className="flex gap-3 items-center">
-          <div className={`w-11 h-11 rounded-2xl flex items-center justify-center ${isConcluido ? 'bg-slate-800 text-emerald-500' : 'bg-amber-500/10 text-amber-500'}`}><Users size={18}/></div>
-          <div>
-            <h3 className={`font-black text-sm uppercase tracking-tight ${isConcluido ? 'text-slate-500 line-through' : 'text-slate-100'}`}>{nome}</h3>
-            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">{item.dados[5]}</p>
-          </div>
-        </div>
-        <div className="text-right">
-          <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Status</span>
-          <p className={`text-xs font-black uppercase ${isConcluido ? 'text-emerald-500' : 'text-amber-500'}`}>{status}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ==========================================
-// VIEW: CARTÕES
-// ==========================================
-function CartoesView({ items, mes }) {
-  const total = items.reduce((acc, curr) => acc + (parseFloat(curr?.dados?.[2]) || 0), 0);
-  return (
-    <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="bg-indigo-600/10 border border-indigo-500/20 p-8 rounded-[2.5rem] shadow-xl">
-        <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2">Fatura Prevista | {mes}</p>
-        <p className="text-4xl font-black text-white tracking-tighter">R$ {total.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-      </div>
-      
-      <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1">Lançamentos</h3>
-      {items.map((item, idx) => (
-        <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center border border-indigo-500/20"><CreditCard size={18}/></div>
-            <div>
-              <p className="font-black text-sm text-slate-100">{item.dados[0]}</p>
-              <p className="text-[9px] font-black text-slate-500 uppercase">{item.dados[1]}</p>
+    <div className="space-y-4 animate-in fade-in duration-500">
+      <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1 mb-4">Resumo por Cliente</h3>
+      {clientesList.map((cli, idx) => {
+        const pendente = cli.totalEmprestado - cli.totalPago; // Simplificado sem juros dinâmico na visão macro
+        return (
+          <div key={idx} onClick={() => onAbrirCliente(cli.nome)} className="p-4 bg-slate-900 border border-slate-800 hover:border-amber-500/50 rounded-3xl flex justify-between items-center cursor-pointer transition-all active:scale-95">
+            <div className="flex items-center gap-4">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center border border-amber-900/20"><Users size={18}/></div>
+              <div>
+                <p className="font-black text-sm text-slate-100">{cli.nome}</p>
+                <p className="text-[9px] font-black text-slate-500 uppercase">{cli.dividasAtivas} operações ativas</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className={`font-black text-sm ${pendente > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>R$ {Math.max(0, pendente).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
             </div>
           </div>
-          <p className="font-black text-sm text-slate-200">R$ {parseFloat(item.dados[2] || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-        </div>
-      ))}
+        )
+      })}
     </div>
   );
 }
 
 // ==========================================
-// MODAL DE LANÇAMENTO (ORGANIZADO)
+// VIEW: DOSSIÊ DO CLIENTE (HISTÓRICO)
+// ==========================================
+function ClienteDossieView({ nome, items, onVoltar, onStatusChange }) {
+  const dividas = items.filter(i => i.dados[6] === nome);
+  
+  return (
+    <div className="space-y-4 animate-in slide-in-from-right-8 duration-300">
+      <button onClick={onVoltar} className="flex items-center gap-2 text-emerald-500 font-bold text-xs uppercase mb-4 tracking-widest"><ArrowLeft size={16}/> Voltar</button>
+      <div className="bg-amber-600/10 border border-amber-500/20 p-8 rounded-[2.5rem] shadow-xl">
+        <p className="text-[10px] font-black text-amber-500 uppercase tracking-widest mb-1">Dossiê do Cliente</p>
+        <p className="text-3xl font-black text-white tracking-tighter">{nome}</p>
+      </div>
+
+      <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1 mt-6">Extrato de Operações</h3>
+      {dividas.map((item, idx) => {
+        const vOriginal = parseFloat(item.dados[7]) || 0;
+        const juros = parseFloat(item.dados[10]) || 0;
+        const dataAcordo = parseDataBR(item.dados[5]);
+        const dataVenc = parseDataBR(item.dados[8]); // Coluna I (Data Pagamento Combinada)
+        const isConcluido = item.dados[9] === 'Concluído';
+        
+        // Juros simples
+        const hoje = new Date();
+        let meses = (hoje.getFullYear() - dataAcordo.getFullYear()) * 12 + (hoje.getMonth() - dataAcordo.getMonth());
+        if (hoje.getDate() < dataAcordo.getDate()) meses--;
+        meses = Math.max(1, meses);
+        const jurosTotais = vOriginal * (juros/100) * meses;
+
+        const isVencido = !isConcluido && (hoje > dataVenc);
+
+        return (
+          <div key={idx} className={`p-5 rounded-[2rem] border ${isConcluido ? 'bg-slate-900/40 border-slate-800' : isVencido ? 'bg-red-950/20 border-red-900/50' : 'bg-slate-900 border-amber-900/30'}`}>
+            <div className="flex justify-between items-start mb-4">
+              <div>
+                <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-lg ${isConcluido ? 'bg-slate-800 text-slate-400' : isVencido ? 'bg-red-900/50 text-red-400' : 'bg-amber-900/50 text-amber-400'}`}>
+                  {isConcluido ? 'Paga' : isVencido ? 'Vencida' : 'Aberta'}
+                </span>
+                <p className="text-[10px] font-bold text-slate-500 mt-2">Vence em: {dataVenc.toLocaleDateString('pt-BR')}</p>
+              </div>
+              <button onClick={() => onStatusChange(item, isConcluido ? 'Pendente' : 'Concluído')} className="p-2 bg-slate-800 rounded-xl text-slate-400 hover:text-emerald-400 transition-colors">
+                <CheckCircle size={18}/>
+              </button>
+            </div>
+            <div className="flex justify-between items-center border-t border-slate-800 pt-3">
+              <span className="text-xs text-slate-400 font-bold">Principal + Juros</span>
+              <span className="text-lg font-black text-slate-200">R$ {(vOriginal + jurosTotais).toLocaleString('pt-BR', {minimumFractionDigits:2})}</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ==========================================
+// VIEW: CARTÕES (COM STATUS INTELIGENTE)
+// ==========================================
+function CartoesView({ items, onPagar }) {
+  const hoje = new Date();
+  
+  const calcularStatusFatura = (dataCompraStr, banco, statusPagamento) => {
+    if (statusPagamento === 'Paga') return { label: 'Paga', color: 'text-slate-500', bg: 'bg-slate-800' };
+    
+    const config = CONFIG_CARTOES[banco];
+    if (!config) return { label: 'Avulso', color: 'text-blue-400', bg: 'bg-blue-900/20' }; // Despesas em dinheiro/PIX
+
+    const dataCompra = parseDataBR(dataCompraStr);
+    
+    // Simplificação de Fatura: Se a compra foi antes do fechamento deste mês, ela vence este mês.
+    let mesVencimento = dataCompra.getMonth();
+    let anoVencimento = dataCompra.getFullYear();
+    if (dataCompra.getDate() >= config.fechamento) {
+      mesVencimento++;
+      if (mesVencimento > 11) { mesVencimento = 0; anoVencimento++; }
+    }
+    
+    const dataVencimentoReal = new Date(anoVencimento, mesVencimento, config.vencimento);
+    const dataFechamentoReal = new Date(anoVencimento, mesVencimento - (dataCompra.getDate() >= config.fechamento ? 0 : 1), config.fechamento);
+
+    if (hoje > dataVencimentoReal) return { label: 'Vencido', color: 'text-red-400', bg: 'bg-red-900/30' };
+    if (hoje > dataFechamentoReal && hoje <= dataVencimentoReal) return { label: 'Fechada', color: 'text-amber-400', bg: 'bg-amber-900/30' };
+    return { label: 'Atual', color: 'text-emerald-400', bg: 'bg-emerald-900/30' };
+  };
+
+  return (
+    <div className="space-y-4 animate-in fade-in duration-500">
+      <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1 mb-4">Gestão de Lançamentos</h3>
+      {items.map((item, idx) => {
+        const status = calcularStatusFatura(item.dados[8], item.dados[6], item.dados[9]); // Col J: Status Paga
+        const isFixo = item.dados[10] === 'Fixo'; // Assumindo Col K: Tipo (Fixo/Avulso)
+
+        return (
+          <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center">
+            <div className="flex items-center gap-4">
+              <div className={`w-10 h-10 rounded-2xl flex items-center justify-center border ${status.bg} ${status.color}`}>
+                <CreditCard size={18}/>
+              </div>
+              <div>
+                <p className="font-black text-sm text-slate-100 flex items-center gap-2">
+                  {item.dados[5]} {isFixo && <span className="text-[8px] bg-indigo-900/50 text-indigo-400 px-2 py-0.5 rounded-md">FIXO</span>}
+                </p>
+                <p className="text-[9px] font-black text-slate-500 uppercase mt-1">{item.dados[6]} • <span className={status.color}>{status.label}</span></p>
+              </div>
+            </div>
+            <div className="text-right flex flex-col items-end gap-2">
+              <p className={`font-black text-sm ${status.label === 'Paga' ? 'text-slate-500 line-through' : 'text-slate-200'}`}>R$ {parseFloat(item.dados[7] || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+              {status.label !== 'Paga' && (
+                <button onClick={() => onPagar(item)} className="text-[9px] font-black uppercase tracking-widest bg-emerald-900/30 text-emerald-400 px-3 py-1.5 rounded-lg active:scale-90 transition-all">Pagar</button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ==========================================
+// MODAL DE LANÇAMENTO (COM CONTA FIXA E VENCIMENTOS)
 // ==========================================
 function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos }) {
   const [formData, setFormData] = useState({ 
     data: new Date().toISOString().split('T')[0], 
+    dataVenc: new Date().toISOString().split('T')[0], 
     banco: meusBancos[0] || 'Dinheiro', 
     ativoTipo: 'Ação',
-    nome: '', valor: '', juros: '', he50: '', he100: '', descontos: ''
+    nome: '', valor: '', juros: '', he50: '', he100: '', descontos: '', isFixo: false
   });
   
   const inputClass = "w-full bg-slate-800 border border-slate-700/50 rounded-2xl p-4 text-white placeholder:text-slate-500 focus:border-emerald-500/50 focus:ring-1 outline-none transition-all text-sm font-bold";
@@ -381,10 +526,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos }) {
       <div className="bg-slate-900 w-full max-w-md rounded-[3rem] border border-slate-800 p-8 shadow-2xl animate-in slide-in-from-bottom-10 overflow-y-auto max-h-[90vh]">
         <div className="flex justify-between items-center mb-8">
           <h3 className="font-black text-xl text-emerald-500 tracking-tight">
-            {tipo === 'escolha' ? 'Novo Registro' : 
-             tipo === 'cartao' ? 'Despesa / Cartão' : 
-             tipo === 'ativo' ? 'Meus Ativos' : 
-             tipo === 'salario' ? 'Lançar Salário' : 'Nova Cobrança'}
+            {tipo === 'escolha' ? 'Novo Registro' : tipo === 'cartao' ? 'Despesa / Cartão' : tipo === 'ativo' ? 'Meus Ativos' : tipo === 'salario' ? 'Lançar Salário' : 'Nova Cobrança'}
           </h3>
           <button onClick={onClose} className="p-2 bg-slate-800 rounded-full text-slate-500 hover:text-white"><X size={20}/></button>
         </div>
@@ -392,71 +534,48 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos }) {
         {tipo === 'escolha' ? (
           <div className="grid grid-cols-2 gap-3">
             <ChoiceBtn onClick={() => setTipo('salario')} icon={<Banknote className="text-blue-400"/>} label="Salário" />
-            <ChoiceBtn onClick={() => setTipo('cartao')} icon={<CreditCard className="text-indigo-400"/>} label="Cartão" />
-            <ChoiceBtn onClick={() => setTipo('ativo')} icon={<Wallet className="text-emerald-400"/>} label="Ativo" />
+            <ChoiceBtn onClick={() => setTipo('cartao')} icon={<CreditCard className="text-indigo-400"/>} label="Gastos" />
+            <ChoiceBtn onClick={() => setTipo('ativo')} icon={<Wallet className="text-emerald-400"/>} label="Ativos" />
             <ChoiceBtn onClick={() => setTipo('devedor')} icon={<Users className="text-amber-400"/>} label="Devedor" />
           </div>
         ) : (
           <form className="space-y-4" onSubmit={(e) => {
             e.preventDefault();
-            const dataFormatadaBR = formData.data.split('-').reverse().join('/');
+            const dataBR = formData.data.split('-').reverse().join('/');
+            const vencBR = formData.dataVenc.split('-').reverse().join('/');
             let payload = {}; let abaDestino = "";
 
             if (tipo === 'devedor') {
               abaDestino = 'bdDevedores';
-              payload = { "Data Acordo": dataFormatadaBR, "Nome Devedor": formData.nome, "Valor Total": parseFloat(formData.valor) || 0, "Motivo": "Pendente", "Valor Parcela": parseFloat(formData.juros) || 0, "Observações": "App" };
+              payload = { "Data Acordo": dataBR, "Nome Devedor": formData.nome, "Valor Total": parseFloat(formData.valor)||0, "Data Pagamento Combinada": vencBR, "Motivo": "Pendente", "Valor Parcela": parseFloat(formData.juros)||0, "Observações": "App" };
             } else if (tipo === 'cartao') {
               abaDestino = 'bdLancamentos';
-              payload = { "Categoria": formData.nome, "Conta/Cartão": formData.banco, "Valor": parseFloat(formData.valor) || 0, "Data": dataFormatadaBR };
+              payload = { "Categoria": formData.nome, "Conta/Cartão": formData.banco, "Valor": parseFloat(formData.valor)||0, "Data": dataBR, "Status Pagamento": "Pendente", "Tipo Conta": formData.isFixo ? "Fixo" : "Avulso" };
             } else if (tipo === 'ativo') {
               if (formData.ativoTipo === 'Renda Fixa') {
                 abaDestino = 'DB_Investimentos_Fixos';
-                payload = { "Data": dataFormatadaBR, "Nome": formData.nome, "Valor": parseFloat(formData.valor) || 0, "Taxa": parseFloat(formData.juros) || 0 };
+                payload = { "Data": dataBR, "Nome": formData.nome, "Valor": parseFloat(formData.valor)||0, "Taxa": parseFloat(formData.juros)||0 };
               } else {
                 abaDestino = 'DB_Historico_Ordens';
-                payload = { "Data": dataFormatadaBR, "Ticker": formData.nome.toUpperCase(), "Tipo_Operacao": "COMPRA", "Quantidade": parseFloat(formData.valor) || 0, "Preco_Unitario": parseFloat(formData.juros) || 0, "Tipo_Ativo": formData.ativoTipo };
+                payload = { "Data": dataBR, "Ticker": formData.nome.toUpperCase(), "Tipo_Operacao": "COMPRA", "Quantidade": parseFloat(formData.valor)||0, "Preco_Unitario": parseFloat(formData.juros)||0, "Tipo_Ativo": formData.ativoTipo };
               }
             } else if (tipo === 'salario') {
               abaDestino = 'bdRendas'; 
-              const bruto = parseFloat(formData.valor) || 0;
-              const h50 = parseFloat(formData.he50) || 0;
-              const h100 = parseFloat(formData.he100) || 0;
-              const desc = parseFloat(formData.descontos) || 0;
-              const liquido = bruto + h50 + h100 - desc;
-              
-              payload = { "Data": dataFormatadaBR, "Salario Bruto": bruto, "HE 50%": h50, "HE 100%": h100, "Descontos": desc, "Liquido": liquido, "Observacoes": "App" };
+              const b = parseFloat(formData.valor)||0; const h5 = parseFloat(formData.he50)||0; const h1 = parseFloat(formData.he100)||0; const d = parseFloat(formData.descontos)||0;
+              payload = { "Data": dataBR, "Salario Bruto": b, "HE 50%": h5, "HE 100%": h1, "Descontos": d, "Liquido": b+h5+h1-d, "Observacoes": "App" };
             }
             onSave(payload, abaDestino);
           }}>
 
-            {tipo === 'ativo' && (
-              <div className="relative">
-                <select className={selectClass} value={formData.ativoTipo} onChange={e => setFormData({...formData, ativoTipo: e.target.value})}>
-                  <option value="Ação">Ação (B3)</option>
-                  <option value="FII">Fundo Imobiliário</option>
-                  <option value="Cripto">Criptomoeda</option>
-                  <option value="Renda Fixa">Renda Fixa (CDB/Tesouro)</option>
-                </select>
-                <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none"/>
-              </div>
-            )}
-
             {tipo === 'salario' ? (
-              <>
-                <input type="number" step="any" placeholder="Salário Bruto R$" className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
-                <div className="grid grid-cols-2 gap-4">
-                  <input type="number" step="any" placeholder="Extra 50% R$" className={inputClass} onChange={e => setFormData({...formData, he50: e.target.value})} />
-                  <input type="number" step="any" placeholder="Extra 100% R$" className={inputClass} onChange={e => setFormData({...formData, he100: e.target.value})} />
-                </div>
-                <input type="number" step="any" placeholder="Total Descontos R$" className={`${inputClass} border-red-500/50 text-red-400`} onChange={e => setFormData({...formData, descontos: e.target.value})} />
-                
-                <div className="p-4 bg-emerald-900/20 border border-emerald-500/20 rounded-2xl flex justify-between items-center">
-                  <span className="text-[10px] font-black uppercase text-emerald-500 tracking-widest">Total Líquido Estimado</span>
-                  <span className="text-lg font-black text-emerald-400">
-                    R$ {((parseFloat(formData.valor)||0) + (parseFloat(formData.he50)||0) + (parseFloat(formData.he100)||0) - (parseFloat(formData.descontos)||0)).toLocaleString('pt-BR', {minimumFractionDigits: 2})}
-                  </span>
-                </div>
-              </>
+               <>
+               <input type="number" step="any" placeholder="Salário Bruto R$" className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
+               <div className="grid grid-cols-2 gap-4">
+                 <input type="number" step="any" placeholder="Extra 50% R$" className={inputClass} onChange={e => setFormData({...formData, he50: e.target.value})} />
+                 <input type="number" step="any" placeholder="Extra 100% R$" className={inputClass} onChange={e => setFormData({...formData, he100: e.target.value})} />
+               </div>
+               <input type="number" step="any" placeholder="Descontos R$" className={`${inputClass} border-red-500/50 text-red-400`} onChange={e => setFormData({...formData, descontos: e.target.value})} />
+             </>
             ) : tipo === 'cartao' ? (
               <>
                 <input type="text" placeholder="Nome da Despesa" className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required />
@@ -469,26 +588,45 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos }) {
                     <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" size={16}/>
                   </div>
                 </div>
+                <label className="flex items-center gap-3 p-4 bg-slate-900 border border-slate-800 rounded-2xl cursor-pointer">
+                  <input type="checkbox" className="w-5 h-5 accent-emerald-500 rounded-lg bg-slate-800 border-slate-700" onChange={e => setFormData({...formData, isFixo: e.target.checked})} />
+                  <span className="text-sm font-bold text-slate-300">É uma despesa Fixa?</span>
+                </label>
               </>
-            ) : tipo === 'ativo' && formData.ativoTipo === 'Renda Fixa' ? (
-              <>
-                <input type="text" placeholder="Nome do Ativo" className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required />
-                <div className="grid grid-cols-2 gap-4">
-                  <input type="number" step="any" placeholder="Aporte R$" className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
-                  <input type="number" step="any" placeholder="Taxa a.a (%)" className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required />
-                </div>
-              </>
+            ) : tipo === 'devedor' ? (
+               <>
+                 <input type="text" placeholder="Nome do Cliente" className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required />
+                 <div className="grid grid-cols-2 gap-4">
+                   <input type="number" step="any" placeholder="Emprestado R$" className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
+                   <input type="number" step="any" placeholder="Juros %/mês" className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required />
+                 </div>
+                 <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Data Combinada p/ Pagamento</span>
+                    <input type="date" value={formData.dataVenc} className={`${inputClass} !bg-slate-900`} onChange={e => setFormData({...formData, dataVenc: e.target.value})} />
+                 </div>
+               </>
             ) : (
-              <>
-                <input type="text" placeholder={tipo === 'devedor' ? "Nome do Cliente" : "Ticker (Ex: VALE3)"} className={`${inputClass} ${tipo === 'ativo' ? 'uppercase' : ''}`} onChange={e => setFormData({...formData, nome: e.target.value})} required />
-                <div className="grid grid-cols-2 gap-4">
-                  <input type="number" step="any" placeholder={tipo === 'ativo' ? "Quantidade" : "Emprestado R$"} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
-                  <input type="number" step="any" placeholder={tipo === 'devedor' ? "Juros %/mês" : "Preço Médio"} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required />
+               <>
+                <div className="relative">
+                  <select className={selectClass} value={formData.ativoTipo} onChange={e => setFormData({...formData, ativoTipo: e.target.value})}>
+                    <option value="Ação">Ação (B3)</option><option value="FII">Fundo Imobiliário</option><option value="Cripto">Criptomoeda</option><option value="Renda Fixa">Renda Fixa</option>
+                  </select>
+                  <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none"/>
                 </div>
-              </>
+                 <input type="text" placeholder="Ticker ou Nome" className={`${inputClass} uppercase`} onChange={e => setFormData({...formData, nome: e.target.value})} required />
+                 <div className="grid grid-cols-2 gap-4">
+                   <input type="number" step="any" placeholder="Quantidade" className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
+                   <input type="number" step="any" placeholder="Preço Médio/Taxa" className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required />
+                 </div>
+               </>
             )}
 
-            <input type="date" value={formData.data} className={inputClass} onChange={e => setFormData({...formData, data: e.target.value})} />
+            {tipo !== 'devedor' && (
+              <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800">
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 block mb-1">Data da Transação</span>
+                <input type="date" value={formData.data} className={`${inputClass} !bg-transparent !border-none !p-1 text-emerald-500`} onChange={e => setFormData({...formData, data: e.target.value})} />
+              </div>
+            )}
             
             <button type="submit" className="w-full bg-emerald-600 text-white py-5 rounded-[2rem] font-black shadow-lg shadow-emerald-900/30 active:scale-95 transition-all mt-6 uppercase tracking-widest text-xs">
               Confirmar Lançamento
