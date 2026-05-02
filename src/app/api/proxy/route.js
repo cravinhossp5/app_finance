@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
 
-export const runtime = 'edge'; // Força a execução rápida na Cloudflare
-
 export async function POST(request) {
   try {
     const body = await request.json();
