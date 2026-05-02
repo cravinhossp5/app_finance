@@ -23,7 +23,7 @@ export default function Dashboard() {
   const [gastosCartao, setGastosCartao] = useState([]);
   const [devedores, setDevedores] = useState([]);
 
-  // Notificações internas do App (Substitui os alerts do navegador)
+  // Notificações internas do App
   const showToast = (message, type = 'success') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 4000);
@@ -64,7 +64,7 @@ export default function Dashboard() {
 
   // Lógica Otimista: Salva em segundo plano e libera a tela
   const handleSalvar = async (payload, aba) => {
-    setIsModalOpen(false); // Fecha o popup na hora
+    setIsModalOpen(false); 
     setSyncStatus('syncing');
     showToast("Enviando para a planilha...");
 
@@ -79,7 +79,7 @@ export default function Dashboard() {
       if (result.success || result.status === "success") {
         setSyncStatus('synced');
         showToast("Dados registrados com sucesso!");
-        fetchDados(true); // Atualiza os números em silêncio
+        fetchDados(true); 
       } else {
         throw new Error();
       }
@@ -158,17 +158,45 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave }) {
         ) : (
           <form className="space-y-4" onSubmit={(e) => {
             e.preventDefault();
-            const payload = tipo === 'devedor' 
-              ? { "Nome": formData.nome, "Valor Inicial": parseFloat(formData.valor) || 0, "Juros %": parseFloat(formData.juros) || 0, "Data": formData.data }
-              : tipo === 'cartao' 
-              ? { "Categoria": formData.categoria, "Conta/Cartão": formData.banco, "Valor": parseFloat(formData.valor) || 0, "Data": formData.data }
-              : { "Ticker": formData.ticker?.toUpperCase(), "Quantidade_Total": parseFloat(formData.valor) || 0, "Preco_Medio": parseFloat(formData.juros) || 0, "Tipo (Ação/FII/Cripto)": "Ação" };
-            onSave(payload, tipo === 'devedor' ? 'bdDevedores' : tipo === 'cartao' ? 'bdLancamentos' : 'DB_Investimentos_Variaveis');
+            
+            let payload = {};
+            let abaDestino = "";
+
+            if (tipo === 'devedor') {
+              abaDestino = 'bdDevedores';
+              payload = {
+                // ATENÇÃO: As chaves em vermelho ("Nome", "Valor Inicial"...) 
+                // DEVEM ser 100% idênticas ao cabeçalho da sua planilha (F a L)
+                "Nome": formData.nome,
+                "Valor Inicial": parseFloat(formData.valor) || 0,
+                "Juros %": parseFloat(formData.juros) || 0,
+                "Data": formData.data
+              };
+            } else if (tipo === 'cartao') {
+              abaDestino = 'bdLancamentos';
+              payload = {
+                "Categoria": formData.categoria,
+                "Conta/Cartão": formData.banco,
+                "Valor": parseFloat(formData.valor) || 0,
+                "Data": formData.data
+              };
+            } else if (tipo === 'ativo') {
+              abaDestino = 'DB_Historico_Ordens'; // Corrigido o destino!
+              payload = {
+                "Ticker": formData.ticker?.toUpperCase(),
+                "Tipo": "Ação", // Ajuste o nome dessa coluna se for diferente no histórico
+                "Quantidade": parseFloat(formData.valor) || 0,
+                "Preco": parseFloat(formData.juros) || 0,
+                "Data": formData.data
+              };
+            }
+
+            onSave(payload, abaDestino);
           }}>
             <input type="text" placeholder={tipo === 'devedor' ? "Quem deve?" : "Ticker ou Item"} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value, ticker: e.target.value})} required />
             <div className="grid grid-cols-2 gap-4">
-              <input type="number" step="any" placeholder="Valor R$" className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
-              <input type="text" placeholder={tipo === 'devedor' ? "Juros %" : "Categoria"} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value, categoria: e.target.value})} required />
+              <input type="number" step="any" placeholder={tipo === 'ativo' ? "Quantidade" : "Valor R$"} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
+              <input type="text" placeholder={tipo === 'devedor' ? "Juros %" : tipo === 'ativo' ? "Preço Médio" : "Categoria"} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value, categoria: e.target.value})} required />
             </div>
             <input type="date" value={formData.data} className={inputClass} onChange={e => setFormData({...formData, data: e.target.value})} />
             <button type="submit" className="w-full bg-emerald-600 text-white py-5 rounded-2xl font-black shadow-lg shadow-emerald-900/30 active:scale-95 transition-all mt-4">
