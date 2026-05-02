@@ -114,7 +114,7 @@ export default function Dashboard() {
   const [salarios, setSalarios] = useState([]);
   const [historicoOrdens, setHistoricoOrdens] = useState([]);
   const [meusBancos, setMeusBancos] = useState([]);
-  const [diasFechamento, setDiasFechamento] = useState({}); // Guarda o dicionário dinâmico
+  const [diasFechamento, setDiasFechamento] = useState({});
   const [cryptoLivePrices, setCryptoLivePrices] = useState({});
   
   const [clienteAtivo, setClienteAtivo] = useState(null);
@@ -160,7 +160,6 @@ export default function Dashboard() {
            const nome = safeString(b.dados[0]);
            if (nome && nome.toLowerCase() !== "banco") {
               bl.push(nome);
-              // Coluna B é o índice 1 na aba meus_bancos
               dFechamento[nome] = parseInt(b.dados[1]) || 31; 
            }
         });
@@ -222,7 +221,6 @@ export default function Dashboard() {
 
   const abrirEdicao = (item, tipoStr) => { setEditItem(item); setModalType(tipoStr); setIsModalOpen(true); };
 
-  // Filtra os cartões do mês com base na inteligência de fecho dinâmica
   const cartoesDoMes = gastosCartao.filter(g => {
     const d = parseDataBR(g.dados[5]);
     const banco = g.dados[10]; 
@@ -315,12 +313,12 @@ export default function Dashboard() {
       </header>
 
       <div className="p-4 max-w-2xl mx-auto space-y-6">
-        {activeTab === 'dashboard' && <ResumoView dadosCaixa={dadosCaixa} salarios={salarios} hist={historicoOrdens} mes={mesAtual} ano={anoAtual} onEdit={i => abrirEdicao(i, 'salario')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdRendas', linha: l, message: 'Isto irá apagar o lançamento do histórico.' })} />}
+        {activeTab === 'dashboard' && <ResumoView dadosCaixa={dadosCaixa} salarios={salarios} hist={historicoOrdens} mes={mesAtual} ano={anoAtual} onEdit={i => abrirEdicao(i, 'salario')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdRendas', linha: l, message: 'Isso apagará o lançamento do histórico.' })} />}
         {activeTab === 'patrimonio' && !carteiraDetalhe && <CarteiraView ativosVar={ativosVariaveis} hist={historicoOrdens} ativosFixos={ativosFixos} liveCrypto={cryptoLivePrices} onAbrirDetalhe={setCarteiraDetalhe} />}
         {activeTab === 'patrimonio' && carteiraDetalhe && <CarteiraDetalheView tipo={carteiraDetalhe} ativosVar={ativosVariaveis} hist={historicoOrdens} ativosFixos={ativosFixos} liveCrypto={cryptoLivePrices} onVoltar={() => setCarteiraDetalhe(null)} onEdit={i => abrirEdicao(i, 'ativo')} onDelete={(l, a) => setCustomDialog({ type: 'delete', aba: a, linha: l, message: 'A operação será apagada do histórico.' })} />}
         {activeTab === 'devedores' && !clienteAtivo && <DevedoresView items={devedores} onAbrirCliente={setClienteAtivo} />}
         {activeTab === 'devedores' && clienteAtivo && <ClienteDossieView nome={clienteAtivo} items={devedores} onVoltar={() => setClienteAtivo(null)} onStatusChange={(i, s) => handleGravarDados([i.dados[5], i.dados[6], i.dados[7], i.dados[8], s, i.dados[10], i.dados[11]], 'bdDevedores', i.linha)} onEdit={i => abrirEdicao(i, 'devedor')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdDevedores', linha: l, message: 'A dívida será apagada permanentemente.' })} onRolar={(item, totalAtual) => setCustomDialog({ type: 'rolar', item, totalAtual })} />}
-        {activeTab === 'cartoes' && <CartoesView items={cartoesDoMes} onEdit={i => abrirEdicao(i, 'cartao')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdLancamentos', linha: l, message: 'A despesa desaparecerá da fatura.' })} />}
+        {activeTab === 'cartoes' && <CartoesView items={cartoesDoMes} onEdit={i => abrirEdicao(i, 'cartao')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdLancamentos', linha: l, message: 'A despesa sumirá da fatura.' })} />}
       </div>
 
       <nav className="fixed bottom-0 w-full bg-slate-950/95 backdrop-blur-2xl border-t border-slate-800/50 flex justify-around items-center p-3 z-50 pb-safe">
@@ -409,9 +407,13 @@ function CarteiraView({ ativosVar, hist, ativosFixos, liveCrypto, onAbrirDetalhe
   const cValorMercado = (lista) => lista.reduce((acc, i) => acc + parseCurrency(i.dados[6]), 0); 
   const provAcoes = acoes.reduce((acc, i) => acc + parseCurrency(i.dados[11]), 0); 
   const provFIIs = fiis.reduce((acc, i) => acc + parseCurrency(i.dados[11]), 0);
+  const proventosVariavel = provAcoes + provFIIs;
   
+  let rendimentoFixa = 0;
   const totalFixa = ativosFixos.reduce((acc, i) => {
-    const rf = calcFixa(parseCurrency(i.dados[8]), parseCurrency(i.dados[9]), parseDataBR(i.dados[5]));
+    const vA = parseCurrency(i.dados[8]);
+    const rf = calcFixa(vA, parseCurrency(i.dados[9]), parseDataBR(i.dados[5]));
+    rendimentoFixa += (rf.liquido - vA);
     return acc + rf.liquido;
   }, 0);
 
@@ -425,9 +427,18 @@ function CarteiraView({ ativosVar, hist, ativosFixos, liveCrypto, onAbrirDetalhe
         <p className="text-4xl font-black text-white">R$ {(cValorMercado(acoes) + cValorMercado(fiis) + cValorMercado(criptoArr) + totalFixa).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
         
         <div className="grid grid-cols-2 gap-4 mt-6 pt-6 border-t border-indigo-500/20">
-          <div><p className="text-[9px] text-slate-500 uppercase font-black">Proventos Ações</p><p className="text-sm font-black text-violet-400">R$ {provAcoes.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-          <div><p className="text-[9px] text-slate-500 uppercase font-black">Proventos FIIs</p><p className="text-sm font-black text-violet-400">R$ {provFIIs.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-          <div className="col-span-2"><p className="text-[9px] text-slate-500 uppercase font-black">Total de Proventos Previstos</p><p className="text-lg font-black text-emerald-400">R$ {(provAcoes + provFIIs).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+          <div>
+            <p className="text-[9px] text-slate-500 uppercase font-black">Rendimentos (Variável)</p>
+            <p className="text-sm font-black text-violet-400">R$ {proventosVariavel.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+          </div>
+          <div className="text-right">
+            <p className="text-[9px] text-slate-500 uppercase font-black">Rendimentos (Fixa)</p>
+            <p className="text-sm font-black text-blue-400">+R$ {rendimentoFixa.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+          </div>
+          <div className="col-span-2 text-center pt-2">
+            <p className="text-[9px] text-slate-500 uppercase font-black">Total de Ganhos (Previstos + Juros)</p>
+            <p className="text-lg font-black text-emerald-400">R$ {(proventosVariavel + rendimentoFixa).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+          </div>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -476,7 +487,7 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, liveCrypto, o
         <div className="mb-4 bg-slate-900/50 p-4 rounded-2xl border border-slate-800 flex items-start gap-3">
           <Info size={20} className="text-blue-500 shrink-0 mt-0.5"/> 
           <p className="text-[10px] text-slate-400 leading-relaxed font-bold">
-            Para proteger as fórmulas automáticas de cotação da B3, altere Ações e FIIs diretamente na folha de cálculo (Aba DB_Investimentos_Variaveis).
+            Para proteger suas fórmulas automáticas de cotação da B3, altere Ações e FIIs diretamente na sua planilha (Aba DB_Investimentos_Variaveis).
           </p>
         </div>
       )}
@@ -499,7 +510,7 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, liveCrypto, o
                 <div className="grid grid-cols-2 gap-4 border-t border-slate-800 pt-4 mt-2">
                   <div><p className="text-[8px] font-black text-slate-500 uppercase">Aplicado em {formatDateToBR(dataApp)}</p><p className="text-sm font-black text-slate-300">R$ {vA.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
                   <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Juros (Bruto)</p><p className="text-sm font-black text-blue-400">+R$ {calc.lucro.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-                  <div><p className="text-[8px] font-black text-slate-500 uppercase">Retenção na Fonte (IR)</p><p className="text-sm font-black text-red-400">-R$ {calc.ir.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+                  <div><p className="text-[8px] font-black text-slate-500 uppercase">Imposto de Renda Retido</p><p className="text-sm font-black text-red-400">-R$ {calc.ir.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
                   <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Líquido Disponível</p><p className="text-sm font-black text-emerald-400">R$ {calc.liquido.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
                   {dataVenc && (
                     <div className="col-span-2 pt-2 border-t border-slate-800/50 mt-2"><p className="text-[8px] font-black text-slate-500 uppercase">Data de Vencimento</p><p className="text-xs font-black text-amber-500">{formatDateToBR(dataVenc)}</p></div>
