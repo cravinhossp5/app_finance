@@ -5,7 +5,7 @@ import {
   TrendingUp, LayoutDashboard, Receipt, Users, PlusCircle, Landmark, X, CheckCircle, 
   ChevronLeft, ChevronRight, CreditCard, HandCoins, Loader2, AlertCircle, RefreshCw, 
   Building2, Wallet, Coins, Briefcase, CalendarClock, ChevronDown, Banknote, PieChart,
-  ArrowLeft, Edit, Trash2, RotateCcw, FastForward, Info, History, Activity
+  ArrowLeft, Edit, Trash2, RotateCcw, FastForward, Info, History, Activity, EyeOff, Eye
 } from 'lucide-react';
 
 // ==========================================
@@ -202,10 +202,7 @@ export default function Dashboard() {
     });
     devedores.forEach(dev => {
       const dAcordo = parseDataBR(dev.dados[5]); const vOriginal = parseCurrency(dev.dados[7]); const juros = parseCurrency(dev.dados[10]); const status = safeString(dev.dados[9]);
-      
-      // Matemática Seca e Direta: O juros é fixo pelo percentual preenchido, sem contar meses.
       const montanteFinal = vOriginal + (vOriginal * (juros/100));
-      
       if (dAcordo && dAcordo.getMonth() === mesAtual && dAcordo.getFullYear() === anoAtual && status !== 'Concluído') saida += vOriginal; 
       if (status === 'Concluído' && dAcordo && dAcordo.getMonth() === mesAtual && dAcordo.getFullYear() === anoAtual) { renda += montanteFinal; lucroCobrança += (montanteFinal - vOriginal); }
     });
@@ -305,7 +302,6 @@ export default function Dashboard() {
 
 function ResumoView({ dadosCaixa, salarios, hist, mes, ano, onEdit, onDelete }) {
   const filtrados = salarios.filter(s => { const d = parseDataBR(s.dados[5]); return d && d.getMonth() === mes && d.getFullYear() === ano; });
-  
   const proventosMes = hist.filter(o => {
      const d = parseDataBR(o.dados[5]);
      return safeString(o.dados[7]).toUpperCase() === 'PROVENTO' && d && d.getMonth() === mes && d.getFullYear() === ano;
@@ -459,7 +455,7 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, liveCrypto, o
                 </div>
                 <div className="grid grid-cols-2 gap-4 border-t border-slate-800 pt-4 mt-2">
                   <div><p className="text-[8px] font-black text-slate-500 uppercase">Aplicado em {formatDateToBR(dataApp)}</p><p className="text-sm font-black text-slate-300">R$ {vA.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Juros (Bruto)</p><p className="text-sm font-black text-blue-400">+R$ {calc.lucro.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Juros Bruto / Rendimento</p><p className="text-sm font-black text-blue-400">+R$ {calc.lucro.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
                   <div><p className="text-[8px] font-black text-slate-500 uppercase">Imposto de Renda Retido</p><p className="text-sm font-black text-red-400">-R$ {calc.ir.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
                   <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Líquido Disponível</p><p className="text-sm font-black text-emerald-400">R$ {calc.liquido.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
                   {dataVenc && (
@@ -496,19 +492,27 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, liveCrypto, o
 }
 
 function DevedoresView({ items, onAbrirCliente }) {
+  const [mostrarConcluidos, setMostrarConcluidos] = useState(false);
   const c = {}; let tE = 0; let tR = 0; let luc = 0;
+
   items.forEach(i => {
-    const n = safeString(i.dados[6]) || 'Sem Nome'; if(!c[n]) c[n] = { n, e: 0, p: 0, a: 0, tot: 0 };
+    const n = safeString(i.dados[6]) || 'Sem Nome'; if(!c[n]) c[n] = { n, e: 0, p: 0, a: 0 };
     const emp = parseCurrency(i.dados[7]); const status = safeString(i.dados[9]); const j = parseCurrency(i.dados[10]); 
-    const montante = emp + (emp * (j/100)); // Matemática Plana Manual Fixada
+    const montante = emp + (emp * (j/100)); 
     
     if(status !== 'Concluído') { c[n].e += emp; c[n].a += 1; tE += emp; } 
     if(status === 'Concluído') { c[n].p += montante; tR += montante; luc += (montante - emp); } 
-    c[n].tot += 1; 
   });
+
+  const clientesVisiveis = Object.values(c).filter(cli => mostrarConcluidos || cli.a > 0);
+  clientesVisiveis.sort((a, b) => b.a - a.a);
+
   return (
     <div className="space-y-4 animate-in fade-in duration-300">
-      <div className="bg-amber-600/10 border border-amber-500/20 p-8 rounded-[2.5rem] shadow-xl">
+      <div className="bg-amber-600/10 border border-amber-500/20 p-8 rounded-[2.5rem] shadow-xl relative">
+        <button onClick={() => setMostrarConcluidos(!mostrarConcluidos)} className="absolute top-6 right-6 text-[9px] font-black uppercase text-amber-500/70 bg-amber-900/20 px-3 py-2 rounded-xl active:scale-95 transition-all flex items-center gap-1">
+           {mostrarConcluidos ? <><EyeOff size={12}/> Ocultar Concluídos</> : <><Eye size={12}/> Mostrar Todos</>}
+        </button>
         <p className="text-[10px] font-black text-amber-500 uppercase mb-1">Dinheiro na Rua (Pendentes)</p>
         <p className="text-4xl font-black">R$ {tE.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
         <div className="grid grid-cols-2 gap-4 mt-6 pt-6 border-t border-amber-500/20">
@@ -516,10 +520,13 @@ function DevedoresView({ items, onAbrirCliente }) {
           <div><p className="text-[9px] text-slate-500 uppercase font-black">Lucro Realizado</p><p className={`text-lg font-black ${luc >= 0 ? 'text-blue-400' : 'text-red-400'}`}>R$ {luc.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
         </div>
       </div>
-      {Object.values(c).map((cli, idx) => (
-        <div key={idx} onClick={() => onAbrirCliente(cli.n)} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center cursor-pointer active:scale-95 transition-all">
-          <div className="flex gap-4 items-center"><div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center border border-amber-900/20"><Users size={20}/></div><div><p className="text-sm font-black">{cli.n}</p><p className="text-[9px] text-slate-500 uppercase">{cli.a === 0 ? <span className="text-emerald-500">Acordos Concluídos</span> : `${cli.a} cobranças ativas`}</p></div></div>
-          <p className="text-sm font-black text-amber-400">R$ {cli.e.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+      {clientesVisiveis.map((cli, idx) => (
+        <div key={idx} onClick={() => onAbrirCliente(cli.n)} className={`p-4 border rounded-3xl flex justify-between items-center cursor-pointer active:scale-95 transition-all ${cli.a === 0 ? 'bg-slate-900/50 border-slate-800/50 opacity-70' : 'bg-slate-900 border-slate-800'}`}>
+          <div className="flex gap-4 items-center">
+            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border ${cli.a === 0 ? 'bg-slate-800 text-slate-500 border-slate-700' : 'bg-amber-500/10 text-amber-500 border-amber-900/20'}`}><Users size={20}/></div>
+            <div><p className="text-sm font-black">{cli.n}</p><p className="text-[9px] text-slate-500 uppercase">{cli.a === 0 ? <span className="text-emerald-500">Acordos Concluídos</span> : `${cli.a} cobranças ativas`}</p></div>
+          </div>
+          <p className={`text-sm font-black ${cli.a === 0 ? 'text-slate-500' : 'text-amber-400'}`}>R$ {cli.e.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
         </div>
       ))}
     </div>
@@ -527,19 +534,78 @@ function DevedoresView({ items, onAbrirCliente }) {
 }
 
 function ClienteDossieView({ nome, items, onVoltar, onStatusChange, onEdit, onDelete, onRolar }) {
-  const filtrados = items.filter(i => safeString(i.dados[6]) === nome);
+  const [mostrarConcluidos, setMostrarConcluidos] = useState(false);
+
+  let filtrados = items.filter(i => safeString(i.dados[6]) === nome);
+
+  let tE = 0; let tR = 0; let luc = 0;
+  filtrados.forEach(i => {
+     const vO = parseCurrency(i.dados[7]);
+     const j = parseCurrency(i.dados[10]);
+     const isConcluido = safeString(i.dados[9]) === 'Concluído';
+     const montante = vO + (vO * (j/100));
+     
+     tE += vO; 
+     if (isConcluido) { tR += montante; luc += (montante - vO); }
+  });
+
+  filtrados.sort((a, b) => {
+    const aPendente = safeString(a.dados[9]) !== 'Concluído';
+    const bPendente = safeString(b.dados[9]) !== 'Concluído';
+    if (aPendente && !bPendente) return -1;
+    if (!aPendente && bPendente) return 1;
+    const dateA = parseDataBR(a.dados[8])?.getTime() || 0;
+    const dateB = parseDataBR(b.dados[8])?.getTime() || 0;
+    return dateA - dateB;
+  });
+
+  const visiveis = mostrarConcluidos ? filtrados : filtrados.filter(i => safeString(i.dados[9]) !== 'Concluído');
+
   return (
     <div className="space-y-4 animate-in slide-in-from-right-8 duration-300">
-      <button onClick={onVoltar} className="flex items-center gap-2 text-emerald-500 font-black text-xs uppercase mb-4"><ArrowLeft size={16}/> Voltar</button>
-      <div className="bg-amber-600/10 border border-amber-500/20 p-8 rounded-[2.5rem]"><p className="text-[10px] font-black text-amber-500 uppercase mb-1">Histórico</p><p className="text-3xl font-black">{nome}</p></div>
-      {filtrados.map((i, idx) => {
-        const vO = parseCurrency(i.dados[7]); const j = parseCurrency(i.dados[10]); const dO = parseDataBR(i.dados[5]);
-        const total = vO + (vO*(j/100)); // Calculo plano, juros é a porcentagem e pronto.
+      <div className="flex justify-between items-center mb-4">
+         <button onClick={onVoltar} className="flex items-center gap-2 text-emerald-500 font-black text-xs uppercase"><ArrowLeft size={16}/> Voltar</button>
+         <button onClick={() => setMostrarConcluidos(!mostrarConcluidos)} className="text-[9px] font-black uppercase text-amber-500/70 bg-amber-900/20 px-3 py-2 rounded-xl active:scale-95 transition-all flex items-center gap-1">
+            {mostrarConcluidos ? <><EyeOff size={12}/> Ocultar Concluídos</> : <><Eye size={12}/> Mostrar Todos</>}
+         </button>
+      </div>
+      
+      <div className="bg-amber-600/10 border border-amber-500/20 p-6 rounded-[2.5rem]">
+         <p className="text-3xl font-black mb-4">{nome}</p>
+         <div className="grid grid-cols-3 gap-2 border-t border-amber-500/20 pt-4">
+            <div><p className="text-[8px] text-slate-500 uppercase font-black">Emprestado</p><p className="text-sm font-black text-amber-400">R$ {tE.toLocaleString('pt-BR')}</p></div>
+            <div><p className="text-[8px] text-slate-500 uppercase font-black">Recebido</p><p className="text-sm font-black text-emerald-400">R$ {tR.toLocaleString('pt-BR')}</p></div>
+            <div><p className="text-[8px] text-slate-500 uppercase font-black">Lucro</p><p className="text-sm font-black text-blue-400">R$ {luc.toLocaleString('pt-BR')}</p></div>
+         </div>
+      </div>
+      
+      {visiveis.length === 0 ? <p className="text-xs text-slate-600 italic">Nenhum acordo para mostrar.</p> : visiveis.map((i, idx) => {
+        const vO = parseCurrency(i.dados[7]); const j = parseCurrency(i.dados[10]); 
+        const dO = parseDataBR(i.dados[5]); const dVenc = parseDataBR(i.dados[8]);
+        const total = vO + (vO*(j/100)); 
         const isConcluido = safeString(i.dados[9]) === 'Concluído';
+
+        let diasTexto = "";
+        let diasCor = "text-slate-500";
+        if (!isConcluido && dVenc) {
+           const hoje = new Date(); hoje.setHours(0,0,0,0);
+           const v = new Date(dVenc); v.setHours(0,0,0,0);
+           const diffDias = Math.round((v.getTime() - hoje.getTime()) / (1000 * 3600 * 24));
+
+           if (diffDias > 1) { diasTexto = `Vence em ${diffDias} dias`; diasCor = "text-blue-400"; }
+           else if (diffDias === 1) { diasTexto = `Vence amanhã`; diasCor = "text-amber-400"; }
+           else if (diffDias === 0) { diasTexto = `Vence HOJE`; diasCor = "text-red-400 font-black animate-pulse"; }
+           else { diasTexto = `Atrasado há ${Math.abs(diffDias)} dias`; diasCor = "text-red-500 font-black"; }
+        }
+
         return (
-          <div key={idx} className="p-5 bg-slate-900 border border-slate-800 rounded-[2rem]">
+          <div key={idx} className={`p-5 border rounded-[2rem] transition-all ${isConcluido ? 'bg-slate-900/50 border-slate-800/50 opacity-70' : 'bg-slate-900 border-slate-800'}`}>
             <div className="flex justify-between items-start mb-4">
-              <div><span className={`text-[9px] font-black uppercase px-2 py-1 rounded-lg ${isConcluido ? 'bg-slate-800 text-slate-500' : 'bg-amber-900/50 text-amber-400'}`}>{i.dados[9]}</span><p className="text-[10px] font-bold text-slate-400 mt-2">Acordo: <span className="text-white">{formatDateToBR(dO)}</span></p></div>
+              <div>
+                 <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-lg ${isConcluido ? 'bg-slate-800 text-slate-500' : 'bg-amber-900/50 text-amber-400'}`}>{i.dados[9]}</span>
+                 {!isConcluido && dVenc && ( <p className={`text-[10px] mt-2 uppercase font-black ${diasCor}`}>{diasTexto}</p> )}
+                 <p className="text-[10px] font-bold text-slate-400 mt-1">Pagamento: <span className="text-white">{dVenc ? formatDateToBR(dVenc) : '--/--/----'}</span></p>
+              </div>
               <div className="flex gap-2">
                 <button onClick={() => onEdit(i)} className="bg-slate-800 p-3 rounded-xl text-blue-400 active:scale-90"><Edit size={20}/></button>
                 <button onClick={() => onDelete(i.linha)} className="bg-slate-800 p-3 rounded-xl text-red-400 active:scale-90"><Trash2 size={20}/></button>
@@ -548,7 +614,15 @@ function ClienteDossieView({ nome, items, onVoltar, onStatusChange, onEdit, onDe
                 </button>
               </div>
             </div>
-            <div className="flex justify-between items-end border-t border-slate-800 pt-3"><div className="text-[10px] text-slate-400 font-bold uppercase">Principal: R$ {vO}<br/>Juros: {j}% <span className="text-emerald-500"></span></div><p className={`text-lg font-black ${isConcluido ? 'text-slate-500' : 'text-amber-400'}`}>R$ {total.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+            <div className="flex justify-between items-end border-t border-slate-800 pt-3">
+               <div className="text-[10px] text-slate-400 font-bold uppercase">
+                  Emprestado: R$ {vO}<br/>Juros: {j}%
+               </div>
+               <div className="text-right">
+                  <p className="text-[8px] font-black text-slate-500 uppercase">Total</p>
+                  <p className={`text-lg font-black ${isConcluido ? 'text-slate-500' : 'text-amber-400'}`}>R$ {total.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+               </div>
+            </div>
             {!isConcluido && (
               <button onClick={() => onRolar(i, total)} className="w-full mt-4 bg-amber-900/20 text-amber-500 border border-amber-500/20 py-4 rounded-2xl text-xs font-black uppercase tracking-widest flex justify-center items-center gap-2 active:scale-95 transition-all"><FastForward size={16}/> Opções de Rolagem</button>
             )}
@@ -633,7 +707,7 @@ function CartoesView({ items, onEdit, onDelete }) {
 }
 
 function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem }) {
-  const [formData, setFormData] = useState({ data: new Date().toISOString().split('T')[0], dataVenc: new Date().toISOString().split('T')[0], banco: meusBancos[0] || 'Dinheiro', ativoTipo: 'Ação', subTipo: 'CDB', nome: '', valor: '', juros: '', he50: '', he100: '', dsr: '', adNoturno: '', outros: '', descontos: '', isFixo: false, categoria: '' });
+  const [formData, setFormData] = useState({ data: new Date().toISOString().split('T')[0], dataVenc: new Date().toISOString().split('T')[0], banco: meusBancos[0] || 'Dinheiro', ativoTipo: 'Renda Fixa', subTipo: 'CDB', nome: '', valor: '', juros: '', he50: '', he100: '', dsr: '', adNoturno: '', outros: '', descontos: '', isFixo: false, categoria: '' });
   
   useEffect(() => {
     if (editItem) {
@@ -653,7 +727,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
   return (
     <div className="fixed inset-0 bg-black/95 backdrop-blur-md z-[100] flex items-end md:items-center justify-center p-4">
       <div className="bg-slate-900 w-full max-w-md rounded-[3rem] border border-slate-800 p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
-        <div className="flex justify-between items-center mb-8"><h3 className="font-black text-xl text-emerald-500">{editItem ? `Editar ${tipo}` : 'Novo'}</h3><button onClick={onClose} className="p-3 bg-slate-800 rounded-full text-slate-500"><X size={24}/></button></div>
+        <div className="flex justify-between items-center mb-8"><h3 className="font-black text-xl text-emerald-500">{editItem ? `Editar ${tipo}` : 'Novo Lançamento'}</h3><button onClick={onClose} className="p-3 bg-slate-800 rounded-full text-slate-500"><X size={24}/></button></div>
         {tipo === 'escolha' ? (
           <div className="grid grid-cols-2 gap-3"><ChoiceBtn onClick={() => setTipo('salario')} icon={<Banknote size={32} className="text-blue-400"/>} label="Salário" /><ChoiceBtn onClick={() => setTipo('cartao')} icon={<CreditCard size={32} className="text-indigo-400"/>} label="Gastos" /><ChoiceBtn onClick={() => setTipo('ativo')} icon={<Wallet size={32} className="text-emerald-400"/>} label="Ativos" /><ChoiceBtn onClick={() => setTipo('devedor')} icon={<Users size={32} className="text-amber-400"/>} label="Devedor" /><ChoiceBtn onClick={() => setTipo('provento')} icon={<Coins size={32} className="text-yellow-400"/>} label="Receber Provento" /></div>
         ) : (
@@ -678,7 +752,21 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
             ) : tipo === 'cartao' ? (
               <><input type="text" placeholder="Descrição" value={formData.nome} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required /><div className="grid grid-cols-2 gap-4"><input type="number" step="any" placeholder="Valor" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><input type="text" placeholder="Categoria" value={formData.categoria} className={inputClass} onChange={e => setFormData({...formData, categoria: e.target.value})} required /></div><select className={`${inputClass} appearance-none`} value={formData.banco} onChange={e => setFormData({...formData, banco: e.target.value})}>{meusBancos.map((b, i) => <option key={i} value={b}>{b}</option>)}</select></>
             ) : tipo === 'devedor' ? (
-              <><input type="text" placeholder="Cliente" value={formData.nome} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required /><div className="grid grid-cols-2 gap-4"><input type="number" step="any" placeholder="Valor Emprestado" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><input type="number" step="any" placeholder="Juros Fixo (%)" value={formData.juros} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required /></div><div className="bg-slate-950 p-4 rounded-2xl border border-slate-800"><span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Data Acordada para Pgto.</span><input type="date" value={formData.dataVenc} className={`${inputClass} !bg-slate-900 border-none !p-2 text-amber-500`} onChange={e => setFormData({...formData, dataVenc: e.target.value})} /></div></>
+              <>
+                 <input type="text" placeholder="Cliente" value={formData.nome} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required />
+                 <div className="grid grid-cols-2 gap-4">
+                    <input type="number" step="any" placeholder="Valor Emprestado" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
+                    <input type="number" step="any" placeholder="Juros Fixo (%)" value={formData.juros} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required />
+                 </div>
+                 <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Data que Emprestou</span>
+                    <input type="date" value={formData.data} className={`${inputClass} !bg-slate-900 border-none !p-2 text-emerald-500`} onChange={e => setFormData({...formData, data: e.target.value})} />
+                 </div>
+                 <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Data de Pagamento</span>
+                    <input type="date" value={formData.dataVenc} className={`${inputClass} !bg-slate-900 border-none !p-2 text-amber-500`} onChange={e => setFormData({...formData, dataVenc: e.target.value})} />
+                 </div>
+              </>
             ) : tipo === 'provento' ? (
               <>
                  <div className="flex bg-slate-950 p-1 rounded-2xl mb-4 gap-1">
@@ -711,7 +799,16 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
                 )}
               </>
             )}
-            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800"><span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">{tipo === 'ativo' && formData.ativoTipo === 'Renda Fixa' ? 'Data da Aplicação' : (tipo === 'devedor' ? 'Data que Emprestou' : tipo === 'provento' ? 'Data do Recebimento' : 'Data da Transação')}</span><input type="date" value={formData.data} className={`${inputClass} !bg-slate-900 border-none !p-2 text-emerald-500`} onChange={e => setFormData({...formData, data: e.target.value})} /></div>
+
+            {tipo !== 'devedor' && (
+               <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">
+                     {tipo === 'ativo' && formData.ativoTipo === 'Renda Fixa' ? 'Data da Aplicação' : (tipo === 'provento' ? 'Data do Recebimento' : 'Data da Transação')}
+                  </span>
+                  <input type="date" value={formData.data} className={`${inputClass} !bg-slate-900 border-none !p-2 text-emerald-500`} onChange={e => setFormData({...formData, data: e.target.value})} />
+               </div>
+            )}
+            
             <button type="submit" className="w-full bg-emerald-600 text-white py-6 rounded-3xl font-black uppercase tracking-widest text-xs mt-4 active:scale-95 transition-all">{editItem ? "Atualizar Registro" : "Salvar Lançamento"}</button>
           </form>
         )}
