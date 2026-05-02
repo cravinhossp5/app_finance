@@ -8,9 +8,6 @@ import {
   ArrowLeft, Edit, Trash2
 } from 'lucide-react';
 
-// ==========================================
-// FUNÇÕES AUXILIARES DE DATA E PROTEÇÃO
-// ==========================================
 const safeString = (val) => String(val || '').trim();
 
 function parseDataBR(dataStr) {
@@ -113,7 +110,6 @@ export default function Dashboard() {
 
   useEffect(() => { fetchDados(); }, []);
 
-  // MOTOR CENTRAL DE CRUD 
   const handleGravarDados = async (payload, aba, linha = null) => {
     setIsModalOpen(false); 
     setEditItem(null);
@@ -121,64 +117,34 @@ export default function Dashboard() {
     showToast(linha ? "Atualizando..." : "Enviando...", "info");
 
     try {
-      const body = linha 
-        ? { action: 'atualizar', aba, linha, payload } 
-        : { action: 'adicionar', aba, payload };
-
-      const res = await fetch('/api/proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
+      const body = linha ? { action: 'atualizar', aba, linha, payload } : { action: 'adicionar', aba, payload };
+      const res = await fetch('/api/proxy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if ((await res.json()).success) {
-        showToast(linha ? "Atualizado com sucesso!" : "Registrado com sucesso!");
+        showToast(linha ? "Atualizado!" : "Registrado!");
         fetchDados(true); 
       } else throw new Error();
     } catch (error) {
       setSyncStatus('error');
-      showToast("Falha na comunicação.", "error");
+      showToast("Erro na gravação.", "error");
     }
   };
 
   const handleExcluir = async (linha, aba) => {
-    if(!window.confirm('Tem certeza que deseja APAGAR este registro?')) return;
+    if(!window.confirm('Apagar permanentemente?')) return;
     setSyncStatus('syncing');
-    showToast("Excluindo...", "info");
     try {
-      const res = await fetch('/api/proxy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'excluir', aba, linha })
-      });
-      if ((await res.json()).success) {
-        showToast("Registro apagado!");
-        fetchDados(true);
-      } else throw new Error();
-    } catch (e) {
-      setSyncStatus('error');
-      showToast("Erro ao excluir.", "error");
-    }
+      const res = await fetch('/api/proxy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'excluir', aba, linha }) });
+      if ((await res.json()).success) { showToast("Apagado!"); fetchDados(true); } else throw new Error();
+    } catch (e) { setSyncStatus('error'); showToast("Erro ao excluir.", "error"); }
   };
 
-  const abrirEdicao = (item, tipoStr) => {
-    setEditItem(item);
-    setModalType(tipoStr);
-    setIsModalOpen(true);
-  };
-
-  const handlePagarFatura = async (item) => {
-    const payload = [ item.dados[5], item.dados[6], item.dados[7], item.dados[8], item.dados[9], item.dados[10], "Paga" ];
-    handleGravarDados(payload, 'bdLancamentos', item.linha);
-  };
-
-  // --- MATEMÁTICA TEMPORAL (CAIXA LIVRE ESTRITO) ---
   const calcCaixaLivre = () => {
     let rendaMes = 0; let gastoMes = 0; let investimentoMes = 0; let emprestadoMes = 0; let recebidoMes = 0;
 
     salarios.forEach(s => {
       const d = parseDataBR(s.dados[5]);
-      // Na aba bdRendas agora: Líquido está na coluna K (dados[10])
-      if (d && d.getMonth() === mesAtual && d.getFullYear() === anoAtual) rendaMes += (parseFloat(s.dados[10]) || 0);
+      // Líquido agora na Coluna L (dados[11])
+      if (d && d.getMonth() === mesAtual && d.getFullYear() === anoAtual) rendaMes += (parseFloat(s.dados[11]) || 0);
     });
 
     gastosCartao.forEach(g => {
@@ -189,11 +155,10 @@ export default function Dashboard() {
     historicoOrdens.forEach(ordem => {
       const d = parseDataBR(ordem.dados[5]); 
       const tipoOp = safeString(ordem.dados[7]).toUpperCase(); 
-      const valor = parseFloat(ordem.dados[9]) || 0; 
-      const qtd = parseFloat(ordem.dados[8]) || 0; 
+      const valor = (parseFloat(ordem.dados[8]) || 0) * (parseFloat(ordem.dados[9]) || 0); // Qtd * Preço
       if (d && d.getMonth() === mesAtual && d.getFullYear() === anoAtual) {
-        if (tipoOp.includes('COMPRA')) investimentoMes += (valor * qtd); // Dinheiro SAI da conta corrente
-        if (tipoOp.includes('VENDA')) rendaMes += (valor * qtd); // Dinheiro VOLTA pra conta corrente
+        if (tipoOp.includes('COMPRA')) investimentoMes += valor;
+        if (tipoOp.includes('VENDA')) rendaMes += valor; 
       }
     });
 
@@ -202,7 +167,6 @@ export default function Dashboard() {
       const valorOriginal = parseFloat(dev.dados[7]) || 0;
       const status = safeString(dev.dados[9]);
       const pago = parseFloat(dev.dados[3]) || 0; 
-      
       if (dAcordo && dAcordo.getMonth() === mesAtual && dAcordo.getFullYear() === anoAtual) emprestadoMes += valorOriginal;
       if (status === 'Concluído' && dAcordo && dAcordo.getMonth() === mesAtual) recebidoMes += pago; 
     });
@@ -238,13 +202,10 @@ export default function Dashboard() {
 
       <div className="p-4 max-w-2xl mx-auto space-y-6">
         {activeTab === 'dashboard' && <ResumoView dadosCaixa={calcCaixaLivre()} salarios={salarios} mesAtual={mesAtual} anoAtual={anoAtual} onEdit={(item) => abrirEdicao(item, 'salario')} onDelete={(linha) => handleExcluir(linha, 'bdRendas')} />}
-        
         {activeTab === 'patrimonio' && !carteiraDetalhe && <CarteiraView ativosVar={ativosVariaveis} ativosFixos={ativosFixos} onAbrirDetalhe={setCarteiraDetalhe} />}
         {activeTab === 'patrimonio' && carteiraDetalhe && <CarteiraDetalheView tipo={carteiraDetalhe} ativosVar={ativosVariaveis} ativosFixos={ativosFixos} onVoltar={() => setCarteiraDetalhe(null)} onEdit={(item) => abrirEdicao(item, 'ativo')} onDelete={(linha, aba) => handleExcluir(linha, aba)} />}
-        
         {activeTab === 'devedores' && !clienteAtivo && <DevedoresView items={devedores} onAbrirCliente={setClienteAtivo} />}
         {activeTab === 'devedores' && clienteAtivo && <ClienteDossieView nome={clienteAtivo} items={devedores} onVoltar={() => setClienteAtivo(null)} onStatusChange={(item, s) => handleGravarDados([item.dados[5], item.dados[6], item.dados[7], item.dados[8], s, item.dados[10], item.dados[11]], 'bdDevedores', item.linha)} onEdit={(item) => abrirEdicao(item, 'devedor')} onDelete={(linha) => handleExcluir(linha, 'bdDevedores')} />}
-        
         {activeTab === 'cartoes' && <CartoesView items={gastosCartao} config={bancosConfig} onPagar={handlePagarFatura} onEdit={(item) => abrirEdicao(item, 'cartao')} onDelete={(linha) => handleExcluir(linha, 'bdLancamentos')} />}
       </div>
 
@@ -261,49 +222,30 @@ export default function Dashboard() {
   );
 }
 
-// ==========================================
-// VIEW: RESUMO E SALÁRIOS
-// ==========================================
+// --- VIEWS ---
 function ResumoView({ dadosCaixa, salarios, mesAtual, anoAtual, onEdit, onDelete }) {
-  const salariosDoMes = salarios.filter(s => {
-    const d = parseDataBR(s.dados[5]);
-    return d && d.getMonth() === mesAtual && d.getFullYear() === anoAtual;
-  });
-
+  const salariosDoMes = salarios.filter(s => { const d = parseDataBR(s.dados[5]); return d && d.getMonth() === mesAtual && d.getFullYear() === anoAtual; });
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/20 p-8 rounded-[2.5rem] shadow-xl relative overflow-hidden">
         <div className="absolute -top-10 -right-10 p-6 opacity-5 text-emerald-500"><PieChart size={150}/></div>
         <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-1">Caixa Livre (Mês)</p>
-        <p className={`text-4xl font-black tracking-tighter ${dadosCaixa.livre >= 0 ? 'text-white' : 'text-red-400'}`}>
-          R$ {dadosCaixa.livre.toLocaleString('pt-BR', {minimumFractionDigits: 2})}
-        </p>
+        <p className={`text-4xl font-black tracking-tighter ${dadosCaixa.livre >= 0 ? 'text-white' : 'text-red-400'}`}>R$ {dadosCaixa.livre.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
         <div className="mt-6 flex flex-wrap gap-4 text-xs font-bold text-slate-400">
           <div className="flex flex-col"><span className="text-[9px] uppercase tracking-widest text-slate-500">Entradas Totais</span><span className="text-blue-400">+ R$ {dadosCaixa.renda.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span></div>
           <div className="flex flex-col"><span className="text-[9px] uppercase tracking-widest text-slate-500">Saídas Totais</span><span className="text-red-400">- R$ {dadosCaixa.saida.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span></div>
         </div>
       </div>
-
-      <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1 mb-2">Entradas do Mês</h3>
-      {salariosDoMes.length === 0 ? <p className="text-xs text-slate-600 italic">Sem registros de renda.</p> : salariosDoMes.map((item, idx) => (
-        <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center group">
+      <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1">Histórico de Renda</h3>
+      {salariosDoMes.map((item, idx) => (
+        <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center">
           <div className="flex items-center gap-4">
             <div className="w-10 h-10 rounded-2xl bg-blue-500/10 text-blue-400 flex items-center justify-center"><Banknote size={18}/></div>
-            <div>
-              <p className="font-black text-sm text-slate-100">Salário / Renda</p>
-              <p className="text-[9px] font-black text-slate-500 uppercase">{formatDateToBR(parseDataBR(item.dados[5]))}</p>
-            </div>
+            <div><p className="font-black text-sm text-slate-100">Salário / Renda</p><p className="text-[9px] font-black text-slate-500 uppercase">{formatDateToBR(parseDataBR(item.dados[5]))}</p></div>
           </div>
           <div className="flex items-center gap-3">
-            <div className="text-right">
-              {/* Líquido está na coluna K (10) */}
-              <p className="font-black text-sm text-blue-400">+ R$ {parseFloat(item.dados[10]||0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-              <p className="text-[8px] text-slate-500 uppercase">Bruto: R$ {parseFloat(item.dados[6]||0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-            </div>
-            <div className="flex flex-col gap-2 border-l border-slate-800 pl-3">
-              <button onClick={() => onEdit(item)} className="text-slate-500 hover:text-blue-400 transition-colors"><Edit size={14}/></button>
-              <button onClick={() => onDelete(item.linha)} className="text-slate-500 hover:text-red-400 transition-colors"><Trash2 size={14}/></button>
-            </div>
+            <p className="font-black text-sm text-blue-400">+ R$ {parseFloat(item.dados[11]||0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+            <div className="flex gap-2"><button onClick={() => onEdit(item)} className="text-slate-500 hover:text-blue-400"><Edit size={14}/></button><button onClick={() => onDelete(item.linha)} className="text-slate-500 hover:text-red-400"><Trash2 size={14}/></button></div>
           </div>
         </div>
       ))}
@@ -311,21 +253,17 @@ function ResumoView({ dadosCaixa, salarios, mesAtual, anoAtual, onEdit, onDelete
   );
 }
 
-// ==========================================
-// VIEW: CARTEIRA (RESUMO E MERGULHO)
-// ==========================================
 function CarteiraView({ ativosVar, ativosFixos, onAbrirDetalhe }) {
   const acoes = ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('AÇÃO'));
   const fiis = ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('FII'));
   const cripto = ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('CRIPTO'));
-
   const cCusto = (l) => l.reduce((acc, i) => acc + (parseFloat(i.dados[4]) || 0), 0);
   const totalFixa = ativosFixos.reduce((acc, i) => acc + (parseFloat(i.dados[5]) || 0), 0);
   const totalGeral = cCusto(acoes) + cCusto(fiis) + cCusto(cripto) + totalFixa;
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="bg-emerald-900/20 border border-emerald-500/20 p-8 rounded-[2.5rem] shadow-xl relative overflow-hidden">
+      <div className="bg-emerald-900/20 border border-emerald-500/20 p-8 rounded-[2.5rem] shadow-xl">
         <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-1">Total Investido (Custo)</p>
         <p className="text-4xl font-black text-white tracking-tighter">R$ {totalGeral.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
       </div>
@@ -342,28 +280,16 @@ function CarteiraView({ ativosVar, ativosFixos, onAbrirDetalhe }) {
 function CarteiraDetalheView({ tipo, ativosVar, ativosFixos, onVoltar, onEdit, onDelete }) {
   const isFixa = tipo === 'Renda Fixa';
   const lista = isFixa ? ativosFixos : ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes(tipo.toUpperCase()));
-
   return (
     <div className="space-y-4 animate-in slide-in-from-right-8 duration-300">
-      <button onClick={onVoltar} className="flex items-center gap-2 text-emerald-500 font-bold text-xs uppercase mb-4 tracking-widest"><ArrowLeft size={16}/> Voltar</button>
-      <h3 className="text-lg font-black text-white uppercase tracking-widest ml-1 mb-4">Meus Ativos: {tipo}</h3>
-      {lista.length === 0 ? <p className="text-xs text-slate-600 italic">Nenhum ativo desta categoria.</p> : lista.map((item, idx) => (
+      <button onClick={onVoltar} className="flex items-center gap-2 text-emerald-500 font-bold text-xs uppercase mb-4"><ArrowLeft size={16}/> Voltar</button>
+      <h3 className="text-lg font-black text-white uppercase tracking-widest">{tipo}</h3>
+      {lista.map((item, idx) => (
         <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center">
-          <div>
-            <p className="font-black text-sm text-slate-100 uppercase">{isFixa ? item.dados[6] : item.dados[0]}</p>
-            <p className="text-[9px] font-black text-slate-500 uppercase">
-              {isFixa ? `Taxa: ${item.dados[8]}%` : `Qtd: ${item.dados[2]} • PM: R$ ${parseFloat(item.dados[3]||0).toFixed(2)}`}
-            </p>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="text-right">
-              <p className="font-black text-sm text-emerald-400">R$ {parseFloat(isFixa ? item.dados[5] : item.dados[4]||0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-              {!isFixa && <p className={`text-[9px] font-black uppercase ${parseFloat(item.dados[7]||0) >= 0 ? 'text-blue-400' : 'text-red-400'}`}>Lucro: R$ {parseFloat(item.dados[7]||0).toFixed(2)}</p>}
-            </div>
-            <div className="flex flex-col gap-2 border-l border-slate-800 pl-3">
-              <button onClick={() => onEdit(item)} className="text-slate-500 hover:text-emerald-400 transition-colors"><Edit size={16}/></button>
-              <button onClick={() => onDelete(item.linha, isFixa ? 'DB_Investimentos_Fixos' : 'DB_Historico_Ordens')} className="text-slate-500 hover:text-red-400 transition-colors"><Trash2 size={16}/></button>
-            </div>
+          <div><p className="font-black text-sm text-slate-100 uppercase">{isFixa ? item.dados[6] : item.dados[0]}</p><p className="text-[9px] font-black text-slate-500 uppercase">{isFixa ? `Taxa: ${item.dados[8]}%` : `Qtd: ${item.dados[2]} • PM: R$ ${parseFloat(item.dados[3]||0).toFixed(2)}`}</p></div>
+          <div className="flex items-center gap-3 text-right">
+            <div><p className="font-black text-sm text-emerald-400">R$ {parseFloat(isFixa ? item.dados[5] : item.dados[4]||0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p></div>
+            <button onClick={() => onEdit(item)} className="text-slate-500"><Edit size={16}/></button>
           </div>
         </div>
       ))}
@@ -371,145 +297,50 @@ function CarteiraDetalheView({ tipo, ativosVar, ativosFixos, onVoltar, onEdit, o
   );
 }
 
-function InfoCard({ icon, title, value, color, onClick }) {
-  return (
-    <div onClick={onClick} className="bg-slate-900 border border-slate-800 p-5 rounded-[2rem] cursor-pointer hover:border-slate-600 transition-all active:scale-95">
-      <div className={`mb-3 ${color}`}>{icon}</div>
-      <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{title}</p>
-      <p className="text-lg font-black text-slate-200 tracking-tight">R$ {value.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-    </div>
-  );
-}
-
-// ==========================================
-// VIEW: COBRANÇAS (MACRO VIEW TOP)
-// ==========================================
 function DevedoresView({ items, onAbrirCliente }) {
-  // Calcula totais globais e agrupa por cliente
-  const clientesObj = {};
-  let totalEmprestadoGlobal = 0;
-  let totalRecebidoGlobal = 0;
-  let lucroRealizado = 0;
-
-  items.forEach(item => {
-    const nome = safeString(item.dados[6]) || 'Sem Nome';
-    if (!clientesObj[nome]) clientesObj[nome] = { nome, totalEmprestado: 0, totalPago: 0, dividasAtivas: 0 };
-    
-    const emprestado = parseFloat(item.dados[7]) || 0;
-    const pago = parseFloat(item.dados[3]) || 0;
-    const status = safeString(item.dados[9]);
-
-    clientesObj[nome].totalEmprestado += emprestado;
-    clientesObj[nome].totalPago += pago;
-    if (status !== 'Concluído') clientesObj[nome].dividasAtivas += 1;
-
-    totalEmprestadoGlobal += emprestado;
-    totalRecebidoGlobal += pago;
-    if (status === 'Concluído') lucroRealizado += (pago - emprestado);
+  const c = {}; let tEmp = 0; let tRec = 0; let luc = 0;
+  items.forEach(i => {
+    const n = safeString(i.dados[6]) || 'Sem Nome'; if (!c[n]) c[n] = { n, tE: 0, tP: 0, dA: 0 };
+    const e = parseFloat(i.dados[7]) || 0; const p = parseFloat(i.dados[3]) || 0;
+    c[n].tE += e; c[n].tP += p; if (safeString(i.dados[9]) !== 'Concluído') c[n].dA += 1;
+    tEmp += e; tRec += p; if (safeString(i.dados[9]) === 'Concluído') luc += (p - e);
   });
 
   return (
     <div className="space-y-4 animate-in fade-in duration-500">
       <div className="bg-amber-600/10 border border-amber-500/20 p-8 rounded-[2.5rem] shadow-xl">
-        <p className="text-[10px] font-black text-amber-500 uppercase tracking-widest mb-1">Total Emprestado (Geral)</p>
-        <p className="text-4xl font-black text-white tracking-tighter">R$ {totalEmprestadoGlobal.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-        
+        <p className="text-[10px] font-black text-amber-500 uppercase mb-1">Total na Rua (Principal)</p>
+        <p className="text-4xl font-black text-white tracking-tighter">R$ {tEmp.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
         <div className="grid grid-cols-2 gap-4 mt-6 pt-6 border-t border-amber-500/20">
-          <div>
-            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Total Recebido</p>
-            <p className="text-lg font-black text-emerald-400">R$ {totalRecebidoGlobal.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-          </div>
-          <div>
-            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Lucro (Concluídos)</p>
-            <p className={`text-lg font-black ${lucroRealizado >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
-              R$ {lucroRealizado.toLocaleString('pt-BR', {minimumFractionDigits: 2})}
-            </p>
-          </div>
+          <div><p className="text-[9px] font-black text-slate-500 uppercase">Recebido</p><p className="text-lg font-black text-emerald-400">R$ {tRec.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p></div>
+          <div><p className="text-[9px] font-black text-slate-500 uppercase">Lucro</p><p className="text-lg font-black text-blue-400">R$ {luc.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p></div>
         </div>
       </div>
-
-      <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1 mb-4 mt-6">Resumo por Cliente</h3>
-      {Object.values(clientesObj).sort((a,b) => b.dividasAtivas - a.dividasAtivas).map((cli, idx) => {
-        const pendente = cli.totalEmprestado - cli.totalPago;
-        return (
-          <div key={idx} onClick={() => onAbrirCliente(cli.nome)} className="p-4 bg-slate-900 border border-slate-800 hover:border-amber-500/50 rounded-3xl flex justify-between items-center cursor-pointer transition-all active:scale-95">
-            <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center"><Users size={18}/></div>
-              <div>
-                <p className="font-black text-sm text-slate-100">{cli.nome}</p>
-                <p className="text-[9px] font-black text-slate-500 uppercase">{cli.dividasAtivas} operações ativas</p>
-              </div>
-            </div>
-            <div className="text-right">
-              <p className={`font-black text-sm ${pendente > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>R$ {Math.max(0, pendente).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
-            </div>
-          </div>
-        )
-      })}
+      {Object.values(c).map((cli, idx) => (
+        <div key={idx} onClick={() => onAbrirCliente(cli.n)} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center cursor-pointer transition-all active:scale-95">
+          <div className="flex items-center gap-4"><div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center border border-amber-900/20"><Users size={18}/></div><div><p className="font-black text-sm text-slate-100">{cli.n}</p><p className="text-[9px] font-black text-slate-500 uppercase">{cli.dA} operações</p></div></div>
+          <div className="text-right"><p className="font-black text-sm text-amber-400">R$ {Math.max(0, cli.tE - cli.tP).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+        </div>
+      ))}
     </div>
   );
 }
 
-// ==========================================
-// VIEW: DOSSIÊ DO CLIENTE
-// ==========================================
 function ClienteDossieView({ nome, items, onVoltar, onStatusChange, onEdit, onDelete }) {
   const dividas = items.filter(i => safeString(i.dados[6]) === nome);
-  
   return (
     <div className="space-y-4 animate-in slide-in-from-right-8 duration-300">
       <button onClick={onVoltar} className="flex items-center gap-2 text-emerald-500 font-bold text-xs uppercase mb-4 tracking-widest"><ArrowLeft size={16}/> Voltar</button>
-      <div className="bg-amber-600/10 border border-amber-500/20 p-8 rounded-[2.5rem] shadow-xl">
-        <p className="text-[10px] font-black text-amber-500 uppercase tracking-widest mb-1">Dossiê do Cliente</p>
-        <p className="text-3xl font-black text-white tracking-tighter">{nome}</p>
-      </div>
-
-      <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1 mt-6">Extrato de Operações</h3>
+      <div className="bg-amber-600/10 border border-amber-500/20 p-8 rounded-[2.5rem] shadow-xl"><p className="text-[10px] font-black text-amber-500 uppercase mb-1">Dossiê do Cliente</p><p className="text-3xl font-black text-white tracking-tighter">{nome}</p></div>
+      <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1 mt-6">Histórico</h3>
       {dividas.map((item, idx) => {
-        const vOriginal = parseFloat(item.dados[7]) || 0;
-        const juros = parseFloat(item.dados[10]) || 0;
-        const dataAcordo = parseDataBR(item.dados[5]);
-        const dataVenc = parseDataBR(item.dados[8]); 
-        const isConcluido = safeString(item.dados[9]) === 'Concluído';
-        
-        const hoje = new Date();
-        let meses = dataAcordo ? (hoje.getFullYear() - dataAcordo.getFullYear()) * 12 + (hoje.getMonth() - dataAcordo.getMonth()) : 1;
-        if (dataAcordo && hoje.getDate() < dataAcordo.getDate()) meses--;
-        meses = Math.max(1, meses);
-        const jurosTotais = vOriginal * (juros/100) * meses;
-
-        const isVencido = !isConcluido && (hoje > dataVenc);
-
+        const vO = parseFloat(item.dados[7]) || 0; const j = parseFloat(item.dados[10]) || 0; const dO = parseDataBR(item.dados[5]);
+        const hoje = new Date(); let m = dO ? (hoje.getFullYear() - dO.getFullYear()) * 12 + (hoje.getMonth() - dO.getMonth()) : 1;
+        if (dO && hoje.getDate() < dO.getDate()) m--; m = Math.max(1, m); const jT = vO * (j/100) * m;
         return (
-          <div key={idx} className={`p-5 rounded-[2rem] border ${isConcluido ? 'bg-slate-900/40 border-slate-800' : isVencido ? 'bg-red-950/20 border-red-900/50' : 'bg-slate-900 border-amber-900/30'}`}>
-            <div className="flex justify-between items-start mb-4">
-              <div>
-                <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-lg ${isConcluido ? 'bg-slate-800 text-slate-400' : isVencido ? 'bg-red-900/50 text-red-400' : 'bg-amber-900/50 text-amber-400'}`}>
-                  {isConcluido ? 'Paga' : isVencido ? 'Vencida' : 'Aberta'}
-                </span>
-                <p className="text-[10px] font-bold text-slate-500 mt-2">Vence em: {formatDateToBR(dataVenc)}</p>
-              </div>
-              <div className="flex gap-2">
-                <button onClick={() => onEdit(item)} className="p-2 bg-slate-800 rounded-xl text-slate-400 hover:text-blue-400"><Edit size={16}/></button>
-                <button onClick={() => onDelete(item.linha)} className="p-2 bg-slate-800 rounded-xl text-slate-400 hover:text-red-400"><Trash2 size={16}/></button>
-                <button onClick={() => onStatusChange(item, isConcluido ? 'Pendente' : 'Concluído')} className="p-2 bg-slate-800 rounded-xl text-slate-400 hover:text-emerald-400"><CheckCircle size={16}/></button>
-              </div>
-            </div>
-            
-            <div className="flex flex-col gap-1 border-t border-slate-800 pt-3 mt-3">
-              <div className="flex justify-between text-xs text-slate-400">
-                <span>Principal Emprestado:</span>
-                <span>R$ {vOriginal.toLocaleString('pt-BR', {minimumFractionDigits:2})}</span>
-              </div>
-              <div className="flex justify-between text-xs text-slate-400">
-                <span>Taxa de Juros Aplicada:</span>
-                <span>{juros}% ao mês</span>
-              </div>
-              <div className="flex justify-between items-center mt-1">
-                <span className="text-xs text-amber-400 font-bold uppercase tracking-widest">Saldo Devedor Atual:</span>
-                <span className="text-lg font-black text-amber-400">R$ {(vOriginal + jurosTotais).toLocaleString('pt-BR', {minimumFractionDigits:2})}</span>
-              </div>
-            </div>
+          <div key={idx} className="p-5 rounded-[2rem] border bg-slate-900 border-amber-900/30">
+            <div className="flex justify-between items-start mb-4"><div><span className="text-[9px] font-black uppercase bg-amber-900/50 text-amber-400 px-2 py-1 rounded-lg">{safeString(item.dados[9])}</span><p className="text-[10px] font-bold text-slate-500 mt-2">Acordo: {formatDateToBR(dO)}</p></div><div className="flex gap-2"><button onClick={() => onEdit(item)} className="text-slate-500"><Edit size={16}/></button><button onClick={() => onStatusChange(item, item.dados[9]==='Concluído'?'Pendente':'Concluído')} className="text-emerald-500"><CheckCircle size={16}/></button></div></div>
+            <div className="flex flex-col gap-1 border-t border-slate-800 pt-3 mt-3"><div className="flex justify-between text-xs text-slate-400"><span>Principal: R$ {vO.toLocaleString('pt-BR')}</span><span>Juros: {j}%</span></div><div className="flex justify-between items-center mt-1"><span className="text-xs text-amber-400 font-bold uppercase">Saldo Atual:</span><span className="text-lg font-black text-amber-400">R$ {(vO + jT).toLocaleString('pt-BR')}</span></div></div>
           </div>
         );
       })}
@@ -517,62 +348,16 @@ function ClienteDossieView({ nome, items, onVoltar, onStatusChange, onEdit, onDe
   );
 }
 
-// ==========================================
-// VIEW: CARTÕES
-// ==========================================
 function CartoesView({ items, config, onPagar, onEdit, onDelete }) {
-  const hoje = new Date();
-  
-  const calcularStatusFatura = (dataCompraStr, banco, statusPagamento) => {
-    if (safeString(statusPagamento).trim().toUpperCase() === 'PAGA') return { label: 'Paga', color: 'text-slate-500', bg: 'bg-slate-800' };
-    const configBanco = config[banco];
-    if (!configBanco) return { label: 'Avulso', color: 'text-blue-400', bg: 'bg-blue-900/20' }; 
-
-    const dataCompra = parseDataBR(dataCompraStr);
-    if(!dataCompra) return { label: 'Avulso', color: 'text-blue-400', bg: 'bg-blue-900/20' };
-
-    let mesVencimento = dataCompra.getMonth();
-    let anoVencimento = dataCompra.getFullYear();
-    if (dataCompra.getDate() >= configBanco.fechamento) {
-      mesVencimento++; if (mesVencimento > 11) { mesVencimento = 0; anoVencimento++; }
-    }
-    const dataVencimentoReal = new Date(anoVencimento, mesVencimento, configBanco.vencimento);
-    const dataFechamentoReal = new Date(anoVencimento, mesVencimento - (dataCompra.getDate() >= configBanco.fechamento ? 0 : 1), configBanco.fechamento);
-
-    if (hoje > dataVencimentoReal) return { label: 'Vencida', color: 'text-red-400', bg: 'bg-red-900/30' };
-    if (hoje > dataFechamentoReal && hoje <= dataVencimentoReal) return { label: 'Fechada', color: 'text-amber-400', bg: 'bg-amber-900/30' };
-    return { label: 'Atual', color: 'text-emerald-400', bg: 'bg-emerald-900/30' };
-  };
-
   return (
     <div className="space-y-4 animate-in fade-in duration-500">
       <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1 mb-4">Gestão de Lançamentos</h3>
-      {items.map((item, idx) => {
-        const status = calcularStatusFatura(item.dados[5], item.dados[10], item.dados[11]); 
-        const isFixo = safeString(item.dados[6]).toUpperCase() === 'FIXO';
-
-        return (
-          <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center">
-            <div className="flex items-center gap-4">
-              <div className={`w-10 h-10 rounded-2xl flex items-center justify-center border ${status.bg} ${status.color}`}><CreditCard size={18}/></div>
-              <div>
-                <p className="font-black text-sm text-slate-100 flex items-center gap-2">{item.dados[8]} {isFixo && <span className="text-[8px] bg-indigo-900/50 text-indigo-400 px-2 py-0.5 rounded-md">FIXO</span>}</p>
-                <p className="text-[9px] font-black text-slate-500 uppercase mt-1">{item.dados[10]} • {item.dados[9]} • <span className={status.color}>{status.label}</span></p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="text-right flex flex-col items-end gap-2">
-                <p className={`font-black text-sm ${status.label === 'Paga' ? 'text-slate-500 line-through' : 'text-slate-200'}`}>R$ {parseFloat(item.dados[7] || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-                {status.label !== 'Paga' && <button onClick={() => onPagar(item)} className="text-[9px] font-black uppercase tracking-widest bg-emerald-900/30 text-emerald-400 px-3 py-1.5 rounded-lg active:scale-90 transition-all">Pagar</button>}
-              </div>
-              <div className="flex flex-col gap-2 border-l border-slate-800 pl-3">
-                <button onClick={() => onEdit(item)} className="text-slate-500 hover:text-blue-400"><Edit size={14}/></button>
-                <button onClick={() => onDelete(item.linha)} className="text-slate-500 hover:text-red-400"><Trash2 size={14}/></button>
-              </div>
-            </div>
-          </div>
-        );
-      })}
+      {items.map((item, idx) => (
+        <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center">
+          <div className="flex items-center gap-4"><div className="w-10 h-10 rounded-2xl border border-indigo-500/20 flex items-center justify-center text-indigo-400"><CreditCard size={18}/></div><div><p className="font-black text-sm text-slate-100">{item.dados[8]}</p><p className="text-[9px] font-black text-slate-500 uppercase">{item.dados[10]} • {item.dados[11]}</p></div></div>
+          <div className="flex items-center gap-3"><p className="font-black text-sm text-slate-200">R$ {parseFloat(item.dados[7] || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p><button onClick={() => onEdit(item)} className="text-slate-500"><Edit size={14}/></button></div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -588,155 +373,77 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
   
   useEffect(() => {
     if (editItem) {
-      const toInputDate = (str) => {
-        const d = parseDataBR(str);
-        return d ? d.toISOString().split('T')[0] : '';
-      };
-      
-      const d = editItem.dados;
-      if (tipo === 'devedor') {
-        setFormData(p => ({...p, data: toInputDate(d[5]), nome: d[6], valor: d[7], dataVenc: toInputDate(d[8]), juros: d[10]}));
-      } else if (tipo === 'cartao') {
-        setFormData(p => ({...p, data: toInputDate(d[5]), isFixo: safeString(d[6]).toUpperCase()==='FIXO', valor: d[7], nome: d[8], categoria: d[9], banco: d[10]}));
-      } else if (tipo === 'salario') {
-        setFormData(p => ({...p, data: toInputDate(d[5]), valor: d[6], he50: d[7], descontos: d[9]})); // Simplificado pra edição
-      } else if (tipo === 'ativo') {
-        if(d.length > 0) setFormData(p => ({...p, data: toInputDate(d[5]), nome: d[6] || d[0], valor: d[7] || d[2], juros: d[8] || d[3], ativoTipo: d[9] || 'Renda Fixa'}));
-      }
+      const d = editItem.dados; const toInp = (s) => parseDataBR(s) ? parseDataBR(s).toISOString().split('T')[0] : '';
+      if (tipo === 'devedor') setFormData(p => ({...p, data: toInp(d[5]), nome: d[6], valor: d[7], dataVenc: toInp(d[8]), juros: d[10]}));
+      else if (tipo === 'cartao') setFormData(p => ({...p, data: toInp(d[5]), isFixo: safeString(d[6]).toUpperCase()==='FIXO', valor: d[7], nome: d[8], categoria: d[9], banco: d[10]}));
+      else if (tipo === 'salario') setFormData(p => ({...p, data: toInp(d[5]), valor: d[6], he50: d[7], he100: d[8], descontos: d[9]})); 
+      else if (tipo === 'ativo') setFormData(p => ({...p, data: toInp(d[5]), nome: d[6], valor: d[7], juros: d[8], ativoTipo: d[9]}));
     }
   }, [editItem, tipo]);
 
-  const inputClass = "w-full bg-slate-800 border border-slate-700/50 rounded-2xl p-4 text-white placeholder:text-slate-500 focus:border-emerald-500/50 focus:ring-1 outline-none transition-all text-sm font-bold";
-  const selectClass = `${inputClass} appearance-none pr-10`;
+  const inputClass = "w-full bg-slate-800 border border-slate-700/50 rounded-2xl p-4 text-white focus:border-emerald-500/50 focus:ring-1 outline-none transition-all text-sm font-bold";
 
   return (
     <div className="fixed inset-0 bg-black/95 backdrop-blur-md z-[100] flex items-end md:items-center justify-center p-4">
       <div className="bg-slate-900 w-full max-w-md rounded-[3rem] border border-slate-800 p-8 shadow-2xl animate-in slide-in-from-bottom-10 overflow-y-auto max-h-[90vh]">
-        <div className="flex justify-between items-center mb-8">
-          <h3 className="font-black text-xl text-emerald-500 tracking-tight">
-            {editItem ? `Editar ${tipo}` : tipo === 'escolha' ? 'Novo Registro' : 'Lançamento'}
-          </h3>
-          <button onClick={onClose} className="p-2 bg-slate-800 rounded-full text-slate-500 hover:text-white"><X size={20}/></button>
-        </div>
-
+        <div className="flex justify-between items-center mb-8"><h3 className="font-black text-xl text-emerald-500">{editItem ? `Editar ${tipo}` : 'Novo Registro'}</h3><button onClick={onClose} className="p-2 bg-slate-800 rounded-full text-slate-500"><X size={20}/></button></div>
         {tipo === 'escolha' ? (
-          <div className="grid grid-cols-2 gap-3">
-            <ChoiceBtn onClick={() => setTipo('salario')} icon={<Banknote className="text-blue-400"/>} label="Salário" />
-            <ChoiceBtn onClick={() => setTipo('cartao')} icon={<CreditCard className="text-indigo-400"/>} label="Gastos" />
-            <ChoiceBtn onClick={() => setTipo('ativo')} icon={<Wallet className="text-emerald-400"/>} label="Ativos" />
-            <ChoiceBtn onClick={() => setTipo('devedor')} icon={<Users className="text-amber-400"/>} label="Devedor" />
-          </div>
+          <div className="grid grid-cols-2 gap-3"><ChoiceBtn onClick={() => setTipo('salario')} icon={<Banknote className="text-blue-400"/>} label="Salário" /><ChoiceBtn onClick={() => setTipo('cartao')} icon={<CreditCard className="text-indigo-400"/>} label="Gastos" /><ChoiceBtn onClick={() => setTipo('ativo')} icon={<Wallet className="text-emerald-400"/>} label="Ativos" /><ChoiceBtn onClick={() => setTipo('devedor')} icon={<Users className="text-amber-400"/>} label="Devedor" /></div>
         ) : (
           <form className="space-y-4" onSubmit={(e) => {
-            e.preventDefault();
-            const dataBR = formData.data.split('-').reverse().join('/');
-            const vencBR = formData.dataVenc.split('-').reverse().join('/');
-            let payload = []; let abaDestino = "";
+            e.preventDefault(); const dBR = formData.data.split('-').reverse().join('/'); const vBR = formData.dataVenc.split('-').reverse().join('/');
+            let pObj = {}; let pArr = []; let aba = "";
 
             if (tipo === 'devedor') {
-              abaDestino = 'bdDevedores';
-              payload = [dataBR, formData.nome, parseFloat(formData.valor)||0, vencBR, editItem ? editItem.dados[9] : "Pendente", parseFloat(formData.juros)||0, editItem ? editItem.dados[11] : "App"];
+              aba = 'bdDevedores'; const st = editItem ? editItem.dados[9] : "Pendente";
+              pObj = { "Data Acordo": dBR, "Nome Devedor": formData.nome, "Valor Total": parseFloat(formData.valor), "Data Pagamento Combinada": vBR, "Motivo": st, "Valor Parcela": parseFloat(formData.juros), "Observações": "App" };
+              pArr = [dBR, formData.nome, parseFloat(formData.valor), vBR, st, parseFloat(formData.juros), "App"];
             } else if (tipo === 'cartao') {
-              abaDestino = 'bdLancamentos';
-              payload = [dataBR, formData.isFixo ? "Fixo" : "Avulso", parseFloat(formData.valor)||0, formData.nome, formData.categoria || "Geral", formData.banco, editItem ? editItem.dados[11] : "Pendente"];
+              aba = 'bdLancamentos'; const st = editItem ? editItem.dados[11] : "Pendente";
+              pObj = { "Data Lançamento": dBR, "Tipo": formData.isFixo ? "Fixo" : "Avulso", "Valor": parseFloat(formData.valor), "Descrição": formData.nome, "Categoria": formData.categoria || "Geral", "Conta/Cartão": formData.banco, "Status": st };
+              pArr = [dBR, formData.isFixo ? "Fixo" : "Avulso", parseFloat(formData.valor), formData.nome, formData.categoria, formData.banco, st];
             } else if (tipo === 'ativo') {
               if (formData.ativoTipo === 'Renda Fixa') {
-                abaDestino = 'DB_Investimentos_Fixos';
-                payload = [dataBR, formData.nome, parseFloat(formData.valor)||0, parseFloat(formData.juros)||0, "", "", ""];
+                aba = 'DB_Investimentos_Fixos'; pObj = { "Data": dBR, "Nome": formData.nome, "Valor": parseFloat(formData.valor), "Taxa": parseFloat(formData.juros) }; pArr = [dBR, formData.nome, parseFloat(formData.valor), parseFloat(formData.juros), "", "", ""];
               } else {
-                abaDestino = 'DB_Historico_Ordens';
-                payload = [dataBR, formData.nome.toUpperCase(), "COMPRA", parseFloat(formData.valor)||0, parseFloat(formData.juros)||0, formData.ativoTipo, ""];
+                aba = 'DB_Historico_Ordens'; pObj = { "Data": dBR, "Ticker": formData.nome.toUpperCase(), "Tipo_Operacao": "COMPRA", "Quantidade": parseFloat(formData.valor), "Preco_Unitario": parseFloat(formData.juros), "Tipo_Ativo": formData.ativoTipo }; pArr = [dBR, formData.nome.toUpperCase(), "COMPRA", parseFloat(formData.valor), parseFloat(formData.juros), formData.ativoTipo, ""];
               }
             } else if (tipo === 'salario') {
-              abaDestino = 'bdRendas'; 
-              const b = parseFloat(formData.valor)||0; 
-              const h5 = parseFloat(formData.he50)||0; 
-              const h1 = parseFloat(formData.he100)||0; 
-              const dsr = parseFloat(formData.dsr)||0;
-              const adNoturno = parseFloat(formData.adNoturno)||0;
-              const outros = parseFloat(formData.outros)||0;
-              const d = parseFloat(formData.descontos)||0;
-              
-              const totalExtrasAgrupado = dsr + adNoturno + outros;
-              const totalHEs = h5 + h1;
-              const liquido = b + totalHEs + totalExtrasAgrupado - d;
-              const detalhesObs = `HE50: ${h5} | HE100: ${h1} | DSR: ${dsr} | Noturno: ${adNoturno} | Outros: ${outros}`;
-
-              payload = [dataBR, b, totalHEs, totalExtrasAgrupado, d, liquido, detalhesObs];
+              aba = 'bdRendas'; const b = parseFloat(formData.valor)||0; const h5 = parseFloat(formData.he50)||0; const h1 = parseFloat(formData.he100)||0; const dsr = parseFloat(formData.dsr)||0; const adN = parseFloat(formData.adNoturno)||0; const out = parseFloat(formData.outros)||0; const d = parseFloat(formData.descontos)||0;
+              const extAg = dsr + adN + out; const liq = b + h5 + h1 + extAg - d; const obs = editItem ? editItem.dados[11] : `HE50:${h5}|HE100:${h1}|DSR:${dsr}|Outros:${adN+out}`;
+              pObj = { "Data": dBR, "Salario Base": b, "HE 50%": h5, "HE 100%": h1, "Adicionais (DSR/Noturno/Outros)": extAg, "Descontos": d, "Liquido": liq, "Observacoes": obs };
+              pArr = [dBR, b, h5, h1, extAg, d, liq, obs];
             }
-            onSave(payload, abaDestino, editItem?.linha);
+            onSave(editItem ? pArr : pObj, aba, editItem?.linha);
           }}>
-
             {tipo === 'salario' ? (
-               <>
-               <input type="number" step="any" placeholder="Salário Base R$" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
-               <div className="grid grid-cols-2 gap-3">
-                 <input type="number" step="any" placeholder="Extra 50% R$" value={formData.he50} className={inputClass} onChange={e => setFormData({...formData, he50: e.target.value})} />
-                 <input type="number" step="any" placeholder="Extra 100% R$" value={formData.he100} className={inputClass} onChange={e => setFormData({...formData, he100: e.target.value})} />
-                 <input type="number" step="any" placeholder="DSR R$" value={formData.dsr} className={inputClass} onChange={e => setFormData({...formData, dsr: e.target.value})} />
-                 <input type="number" step="any" placeholder="Ad. Noturno R$" value={formData.adNoturno} className={inputClass} onChange={e => setFormData({...formData, adNoturno: e.target.value})} />
-               </div>
-               <div className="grid grid-cols-2 gap-3">
-                 <input type="number" step="any" placeholder="Outros (+) R$" value={formData.outros} className={inputClass} onChange={e => setFormData({...formData, outros: e.target.value})} />
-                 <input type="number" step="any" placeholder="Descontos (-) R$" value={formData.descontos} className={`${inputClass} border-red-500/50 text-red-400`} onChange={e => setFormData({...formData, descontos: e.target.value})} />
-               </div>
-             </>
+              <>
+                <input type="number" step="any" placeholder="Salário Base R$" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
+                <div className="grid grid-cols-2 gap-3"><input type="number" step="any" placeholder="HE 50% R$" value={formData.he50} className={inputClass} onChange={e => setFormData({...formData, he50: e.target.value})} /><input type="number" step="any" placeholder="HE 100% R$" value={formData.he100} className={inputClass} onChange={e => setFormData({...formData, he100: e.target.value})} /></div>
+                <div className="grid grid-cols-3 gap-2"><input type="number" step="any" placeholder="DSR" value={formData.dsr} className={inputClass} onChange={e => setFormData({...formData, dsr: e.target.value})} /><input type="number" step="any" placeholder="Noturno" value={formData.adNoturno} className={inputClass} onChange={e => setFormData({...formData, adNoturno: e.target.value})} /><input type="number" step="any" placeholder="Outros" value={formData.outros} className={inputClass} onChange={e => setFormData({...formData, outros: e.target.value})} /></div>
+                <input type="number" step="any" placeholder="Descontos R$" value={formData.descontos} className={`${inputClass} border-red-500/50 text-red-400`} onChange={e => setFormData({...formData, descontos: e.target.value})} />
+              </>
             ) : tipo === 'cartao' ? (
               <>
-                <input type="text" placeholder="Descrição da Despesa" value={formData.nome} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required />
-                <div className="grid grid-cols-2 gap-4">
-                  <input type="number" step="any" placeholder="Valor R$" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
-                  <input type="text" placeholder="Categoria" value={formData.categoria} className={inputClass} onChange={e => setFormData({...formData, categoria: e.target.value})} required />
-                </div>
-                <div className="relative">
-                  <select className={selectClass} value={formData.banco} onChange={e => setFormData({...formData, banco: e.target.value})}>
-                    {meusBancos.map((banco, i) => <option key={i} value={banco}>{banco}</option>)}
-                  </select>
-                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" size={16}/>
-                </div>
-                <label className="flex items-center gap-3 p-4 bg-slate-900 border border-slate-800 rounded-2xl cursor-pointer">
-                  <input type="checkbox" checked={formData.isFixo} className="w-5 h-5 accent-emerald-500 rounded-lg bg-slate-800 border-slate-700" onChange={e => setFormData({...formData, isFixo: e.target.checked})} />
-                  <span className="text-sm font-bold text-slate-300">É uma despesa Fixa?</span>
-                </label>
+                <input type="text" placeholder="Descrição" value={formData.nome} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required />
+                <div className="grid grid-cols-2 gap-4"><input type="number" step="any" placeholder="Valor" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><input type="text" placeholder="Categoria" value={formData.categoria} className={inputClass} onChange={e => setFormData({...formData, categoria: e.target.value})} required /></div>
+                <div className="relative"><select className={`${inputClass} appearance-none pr-10`} value={formData.banco} onChange={e => setFormData({...formData, banco: e.target.value})}>{meusBancos.map((b, i) => <option key={i} value={b}>{b}</option>)}</select><ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" size={16}/></div>
               </>
             ) : tipo === 'devedor' ? (
-               <>
-                 <input type="text" placeholder="Nome do Cliente" value={formData.nome} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required />
-                 <div className="grid grid-cols-2 gap-4">
-                   <input type="number" step="any" placeholder="Emprestado R$" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
-                   <input type="number" step="any" placeholder="Juros %/mês" value={formData.juros} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required />
-                 </div>
-                 <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Data Combinada p/ Pagamento</span>
-                    <input type="date" value={formData.dataVenc} className={`${inputClass} !bg-slate-900`} onChange={e => setFormData({...formData, dataVenc: e.target.value})} />
-                 </div>
-               </>
+              <>
+                <input type="text" placeholder="Cliente" value={formData.nome} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required />
+                <div className="grid grid-cols-2 gap-4"><input type="number" step="any" placeholder="Valor" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><input type="number" step="any" placeholder="Juros %" value={formData.juros} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required /></div>
+                <input type="date" value={formData.dataVenc} className={inputClass} onChange={e => setFormData({...formData, dataVenc: e.target.value})} />
+              </>
             ) : (
-               <>
-                <div className="relative">
-                  <select className={selectClass} value={formData.ativoTipo} onChange={e => setFormData({...formData, ativoTipo: e.target.value})}>
-                    <option value="Ação">Ação (B3)</option><option value="FII">Fundo Imobiliário</option><option value="Cripto">Criptomoeda</option><option value="Renda Fixa">Renda Fixa</option>
-                  </select>
-                  <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none"/>
-                </div>
-                 <input type="text" placeholder="Ticker ou Nome" value={formData.nome} className={`${inputClass} uppercase`} onChange={e => setFormData({...formData, nome: e.target.value})} required />
-                 <div className="grid grid-cols-2 gap-4">
-                   <input type="number" step="any" placeholder="Quantidade/Aporte" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
-                   <input type="number" step="any" placeholder="Preço/Taxa" value={formData.juros} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required />
-                 </div>
-               </>
+              <>
+                <select className={`${inputClass} appearance-none mb-2`} value={formData.ativoTipo} onChange={e => setFormData({...formData, ativoTipo: e.target.value})}><option value="Ação">Ação</option><option value="FII">FII</option><option value="Cripto">Cripto</option><option value="Renda Fixa">Renda Fixa</option></select>
+                <input type="text" placeholder="Ticker/Nome" value={formData.nome} className={`${inputClass} uppercase`} onChange={e => setFormData({...formData, nome: e.target.value})} required />
+                <div className="grid grid-cols-2 gap-4"><input type="number" step="any" placeholder="Qtd/Aporte" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><input type="number" step="any" placeholder="Preço/Taxa" value={formData.juros} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required /></div>
+              </>
             )}
-
-            {tipo !== 'devedor' && (
-              <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800">
-                <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 block mb-1">Data da Transação</span>
-                <input type="date" value={formData.data} className={`${inputClass} !bg-transparent !border-none !p-1 text-emerald-500`} onChange={e => setFormData({...formData, data: e.target.value})} />
-              </div>
-            )}
-            
-            <button type="submit" className="w-full bg-emerald-600 text-white py-5 rounded-[2rem] font-black shadow-lg shadow-emerald-900/30 active:scale-95 transition-all mt-6 uppercase tracking-widest text-xs">
-              {editItem ? "Atualizar" : "Confirmar Lançamento"}
-            </button>
+            <input type="date" value={formData.data} className={inputClass} onChange={e => setFormData({...formData, data: e.target.value})} />
+            <button type="submit" className="w-full bg-emerald-600 text-white py-5 rounded-[2rem] font-black uppercase text-xs">{editItem ? "Atualizar" : "Salvar"}</button>
           </form>
         )}
       </div>
@@ -744,14 +451,5 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
   );
 }
 
-function ChoiceBtn({ onClick, icon, label }) {
-  return (
-    <button onClick={onClick} className="bg-slate-800/40 border border-slate-700/40 py-5 rounded-[2rem] flex flex-col items-center gap-2 hover:bg-slate-800 transition-all active:scale-90">
-      {icon} <span className="font-black text-[9px] uppercase text-slate-400 tracking-widest">{label}</span>
-    </button>
-  );
-}
-
-function NavButton({ icon, label, active, onClick }) { 
-  return ( <button onClick={onClick} className={`flex flex-col items-center gap-1 p-2 w-16 transition-all ${active ? 'text-emerald-500 scale-110' : 'text-slate-600 opacity-60'}`}> {icon} <span className="text-[9px] font-black uppercase tracking-tighter">{label}</span> </button> ); 
-}
+function ChoiceBtn({ onClick, icon, label }) { return ( <button onClick={onClick} className="bg-slate-800/40 border border-slate-700/40 py-5 rounded-[2rem] flex flex-col items-center gap-2 hover:bg-slate-800 transition-all active:scale-90">{icon} <span className="font-black text-[9px] uppercase text-slate-400 tracking-widest">{label}</span></button> ); }
+function NavButton({ icon, label, active, onClick }) { return ( <button onClick={onClick} className={`flex flex-col items-center gap-1 p-2 w-16 transition-all ${active ? 'text-emerald-500 scale-110' : 'text-slate-600 opacity-60'}`}> {icon} <span className="text-[9px] font-black uppercase tracking-tighter">{label}</span> </button> ); }
