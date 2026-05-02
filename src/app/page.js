@@ -89,15 +89,14 @@ export default function Dashboard() {
     setSyncStatus('syncing');
     showToast(`Marcando como ${novoStatus}...`, "info");
     try {
-      // Reconstrói a linha inteira da F (5) até a L (11), modificando apenas o status na J (9)
       const payload = [
-        item.dados[5],  // F: Data Acordo
-        item.dados[6],  // G: Nome
-        item.dados[7],  // H: Valor
-        item.dados[8],  // I: Data PagCombinada
-        novoStatus,     // J: Motivo (ONDE GUARDAMOS O STATUS)
-        item.dados[10], // K: Valor Parcela (ONDE GUARDAMOS O JUROS)
-        item.dados[11]  // L: Observações
+        item.dados[5],  
+        item.dados[6],  
+        item.dados[7],  
+        item.dados[8],  
+        novoStatus,     
+        item.dados[10], 
+        item.dados[11]  
       ];
 
       const res = await fetch('/api/proxy', {
@@ -164,7 +163,6 @@ export default function Dashboard() {
   );
 }
 
-// --- VIEW EXCLUSIVA PARA CÁLCULO E STATUS DOS DEVEDORES ---
 function DevedoresView({ items, onStatusChange }) {
   const ativos = items.filter(i => i.dados[9] !== 'Concluído');
   const concluidos = items.filter(i => i.dados[9] === 'Concluído');
@@ -190,20 +188,28 @@ function DevedoresView({ items, onStatusChange }) {
 }
 
 function DevedorCard({ item, onStatusChange }) {
-  // LÓGICA FINANCEIRA E MAPEAMENTO DA PLANILHA
-  const dataAcordo = new Date(item.dados[5]); // Col F
-  const nome = item.dados[6] || 'Sem Nome'; // Col G
-  const valorOriginal = parseFloat(item.dados[7]) || 0; // Col H
-  const status = item.dados[9] || 'Pendente'; // Col J (Motivo -> Status)
-  const jurosMensal = parseFloat(item.dados[10]) || 0; // Col K (Valor Parcela -> Juros%)
+  const rawDate = item.dados[5] || ""; // Pega a data da coluna F
+  let dataAcordo = new Date(); // Fallback de segurança
+  
+  // Ensinando o app a ler o formato Brasileiro (dd/mm/yyyy) para não quebrar a matemática
+  if (rawDate.includes('/')) {
+    const [dia, mes, ano] = rawDate.split('/');
+    dataAcordo = new Date(ano, mes - 1, dia);
+  } else if (rawDate) {
+    dataAcordo = new Date(rawDate); // Fallback para ler dados antigos caso existam
+  }
+
+  const nome = item.dados[6] || 'Sem Nome'; 
+  const valorOriginal = parseFloat(item.dados[7]) || 0; 
+  const status = item.dados[9] || 'Pendente'; 
+  const jurosMensal = parseFloat(item.dados[10]) || 0; 
   
   const isConcluido = status === 'Concluído';
 
-  // CÁLCULO DE MESES PARA JUROS SIMPLES
   const hoje = new Date();
   let mesesPassados = (hoje.getFullYear() - dataAcordo.getFullYear()) * 12 + (hoje.getMonth() - dataAcordo.getMonth());
   if (hoje.getDate() < dataAcordo.getDate()) mesesPassados--; 
-  const mesesCobrados = Math.max(1, mesesPassados); // Garante cobrança de no mínimo 1 mês
+  const mesesCobrados = Math.max(1, mesesPassados); 
 
   const jurosTotal = valorOriginal * (jurosMensal / 100) * mesesCobrados;
   const montanteFinal = valorOriginal + jurosTotal;
@@ -217,7 +223,10 @@ function DevedorCard({ item, onStatusChange }) {
           </div>
           <div>
             <h3 className={`font-black text-lg leading-tight ${isConcluido ? 'text-slate-400 line-through' : 'text-slate-100'}`}>{nome}</h3>
-            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{dataAcordo.toLocaleDateString('pt-BR')}</p>
+            {/* Exibe formatado bonitinho no card */}
+            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
+              {dataAcordo.toLocaleDateString('pt-BR')}
+            </p>
           </div>
         </div>
         <button 
@@ -249,8 +258,6 @@ function DevedorCard({ item, onStatusChange }) {
     </div>
   );
 }
-
-// ... (Mantenha as funções ListView, CartaoSummary, ChoiceBtn e NavButton como estavam antes)
 
 function ListView({ items, title, type }) {
   return (
@@ -322,14 +329,17 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave }) {
             let payload = {};
             let abaDestino = "";
 
+            // MOTOR DE CONVERSÃO PARA O PADRÃO BRASILEIRO (dd/mm/yyyy)
+            const dataFormatadaBR = formData.data.split('-').reverse().join('/');
+
             if (tipo === 'devedor') {
               abaDestino = 'bdDevedores';
               payload = {
-                "Data Acordo": formData.data,
+                "Data Acordo": dataFormatadaBR, // Envia no formato BR
                 "Nome Devedor": formData.nome,
                 "Valor Total": parseFloat(formData.valor) || 0,
-                "Motivo": "Pendente", // Guardamos o Status na Coluna J
-                "Valor Parcela": parseFloat(formData.juros) || 0, // Guardamos Juros% na Coluna K
+                "Motivo": "Pendente", 
+                "Valor Parcela": parseFloat(formData.juros) || 0, 
                 "Observações": "Registrado via App"
               };
             } else if (tipo === 'cartao') {
@@ -338,12 +348,12 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave }) {
                 "Categoria": formData.categoria,
                 "Conta/Cartão": formData.banco,
                 "Valor": parseFloat(formData.valor) || 0,
-                "Data": formData.data
+                "Data": dataFormatadaBR // Envia no formato BR
               };
             } else if (tipo === 'ativo') {
               abaDestino = 'DB_Historico_Ordens';
               payload = {
-                "Data": formData.data,
+                "Data": dataFormatadaBR, // Envia no formato BR
                 "Ticker": formData.ticker?.toUpperCase(),
                 "Tipo_Operacao": "COMPRA",
                 "Quantidade": parseFloat(formData.valor) || 0,
@@ -358,6 +368,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave }) {
               <input type="number" step="any" placeholder={tipo === 'ativo' ? "Quantidade" : "Valor R$"} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
               <input type="number" step="any" placeholder={tipo === 'devedor' ? "Juros %/mês" : tipo === 'ativo' ? "Preço Médio" : "Cartão/Conta"} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value, banco: e.target.value})} required />
             </div>
+            {/* O HTML5 exige que o input fique YYYY-MM-DD visualmente para funcionar no celular, mas a conversão correta ocorre no envio! */}
             <input type="date" value={formData.data} className={inputClass} onChange={e => setFormData({...formData, data: e.target.value})} />
             <button type="submit" className="w-full bg-emerald-600 text-white py-5 rounded-2xl font-black shadow-lg shadow-emerald-900/30 active:scale-95 transition-all mt-4">
               SALVAR E CALCULAR
