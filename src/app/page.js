@@ -44,26 +44,6 @@ function formatDateToBR(dateObj) {
   return `${String(dateObj.getDate()).padStart(2, '0')}/${String(dateObj.getMonth() + 1).padStart(2, '0')}/${dateObj.getFullYear()}`;
 }
 
-// Lógica de Viragem da Fatura baseada no dicionário dinâmico
-function getMesFatura(dataTx, bancoStr, infoBancos) {
-  if (!dataTx) return null;
-  const banco = safeString(bancoStr);
-  const info = infoBancos[banco] || { fechamento: 31 };
-  const diaFechamento = info.fechamento;
-  
-  let m = dataTx.getMonth();
-  let a = dataTx.getFullYear();
-  
-  if (dataTx.getDate() >= diaFechamento) {
-    m++;
-    if (m > 11) {
-      m = 0;
-      a++;
-    }
-  }
-  return { mes: m, ano: a };
-}
-
 const calcFixa = (vA, taxInput, dataApp) => {
   if (!vA || !dataApp) return { bruto: vA || 0, liquido: vA || 0, ir: 0, lucro: 0 };
   const hoje = new Date();
@@ -225,11 +205,10 @@ export default function Dashboard() {
 
   const abrirEdicao = (item, tipoStr) => { setEditItem(item); setModalType(tipoStr); setIsModalOpen(true); };
 
+  // Cartões agora usam a "Data para Fatura" (dados[5]) escrita manualmente
   const cartoesDoMes = gastosCartao.filter(g => {
-    const d = parseDataBR(g.dados[5]);
-    const banco = g.dados[10]; 
-    const fatura = getMesFatura(d, banco, infoBancos);
-    return fatura && fatura.mes === mesAtual && fatura.ano === anoAtual;
+    const dFatura = parseDataBR(g.dados[5]);
+    return dFatura && dFatura.getMonth() === mesAtual && dFatura.getFullYear() === anoAtual;
   });
 
   const calcCaixaLivre = () => {
@@ -253,15 +232,14 @@ export default function Dashboard() {
     historicoOrdens.forEach(o => {
       const d = parseDataBR(o.dados[5]); 
       const tipoOp = safeString(o.dados[7]).toUpperCase();
+      // Multiplica qtd * preco. No caso de Resgate/Provento a qtd é 1 e o preco é o valor total.
       const valor = parseCurrency(o.dados[8]) * parseCurrency(o.dados[9]);
       if (d && d.getMonth() === mesAtual && d.getFullYear() === anoAtual) {
         if (tipoOp.includes('COMPRA')) saida += valor;
-        if (tipoOp.includes('VENDA')) renda += valor;
-        if (tipoOp.includes('PROVENTO')) renda += parseCurrency(o.dados[9]); 
+        if (tipoOp.includes('VENDA') || tipoOp.includes('RESGATE') || tipoOp.includes('PROVENTO')) renda += valor; 
       }
     });
 
-    // Retorna valores redondos e exatos para evitar bugs de dízima no JS (ex: 64.987)
     return { 
       renda: Number(renda.toFixed(2)), 
       saida: Number(saida.toFixed(2)), 
@@ -327,12 +305,21 @@ export default function Dashboard() {
 
       <div className="p-4 max-w-2xl mx-auto space-y-6">
         {activeTab === 'dashboard' && <ResumoView dadosCaixa={dadosCaixa} salarios={salarios} hist={historicoOrdens} mes={mesAtual} ano={anoAtual} onEdit={i => abrirEdicao(i, 'salario')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdRendas', linha: l, message: 'Isso apagará o lançamento do histórico.' })} />}
+        
+        {/* Passamos o onEdit modificado para lidar com 'resgate' */}
         {activeTab === 'patrimonio' && !carteiraDetalhe && <CarteiraView ativosVar={ativosVariaveis} hist={historicoOrdens} ativosFixos={ativosFixos} liveCrypto={cryptoLivePrices} onAbrirDetalhe={setCarteiraDetalhe} />}
-        {activeTab === 'patrimonio' && carteiraDetalhe && <CarteiraDetalheView tipo={carteiraDetalhe} ativosVar={ativosVariaveis} hist={historicoOrdens} ativosFixos={ativosFixos} liveCrypto={cryptoLivePrices} onVoltar={() => setCarteiraDetalhe(null)} onEdit={i => abrirEdicao(i, 'ativo')} onDelete={(l, a) => setCustomDialog({ type: 'delete', aba: a, linha: l, message: 'A operação será apagada do histórico.' })} />}
+        {activeTab === 'patrimonio' && carteiraDetalhe && <CarteiraDetalheView tipo={carteiraDetalhe} ativosVar={ativosVariaveis} hist={historicoOrdens} ativosFixos={ativosFixos} liveCrypto={cryptoLivePrices} onVoltar={() => setCarteiraDetalhe(null)} onDelete={(l, a) => setCustomDialog({ type: 'delete', aba: a, linha: l, message: 'A operação será apagada do histórico.' })} onEdit={(i, action, extra) => {
+            if(action === 'resgate') {
+                setEditItem(i); setModalType('resgate'); setFormData(p => ({...p, ativoTipo: extra})); setIsModalOpen(true);
+            } else {
+                abrirEdicao(i, 'ativo');
+            }
+        }} />}
+        
         {activeTab === 'devedores' && !clienteAtivo && <DevedoresView items={devedores} onAbrirCliente={setClienteAtivo} />}
         {activeTab === 'devedores' && clienteAtivo && <ClienteDossieView nome={clienteAtivo} items={devedores} onVoltar={() => setClienteAtivo(null)} onStatusChange={(i, s) => handleGravarDados([i.dados[5], i.dados[6], i.dados[7], i.dados[8], s, i.dados[10], i.dados[11]], 'bdDevedores', i.linha)} onEdit={i => abrirEdicao(i, 'devedor')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdDevedores', linha: l, message: 'A dívida será apagada permanentemente.' })} onRolar={(item, totalAtual) => setCustomDialog({ type: 'rolar', item, totalAtual })} />}
         
-        {activeTab === 'cartoes' && <CartoesView items={cartoesDoMes} infoBancos={infoBancos} mesAtual={mesAtual} anoAtual={anoAtual} onEdit={i => abrirEdicao(i, 'cartao')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdLancamentos', linha: l, message: 'A despesa sumirá da fatura.' })} onStatusChange={(i, s) => handleGravarDados([i.dados[5], i.dados[6], i.dados[7], i.dados[8], i.dados[9], i.dados[10], s], 'bdLancamentos', i.linha)} />}
+        {activeTab === 'cartoes' && <CartoesView items={cartoesDoMes} onEdit={i => abrirEdicao(i, 'cartao')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdLancamentos', linha: l, message: 'A despesa sumirá da fatura.' })} onStatusChange={(i, s) => handleGravarDados([i.dados[5], i.dados[6], i.dados[7], i.dados[8], i.dados[9], i.dados[10], s, i.dados[12]], 'bdLancamentos', i.linha)} />}
       </div>
 
       <nav className="fixed bottom-0 w-full bg-slate-950/95 backdrop-blur-2xl border-t border-slate-800/50 flex justify-around items-center p-3 z-50 pb-safe">
@@ -343,7 +330,7 @@ export default function Dashboard() {
         <NavButton active={activeTab === 'cartoes'} onClick={() => {setActiveTab('cartoes');}} icon={<CreditCard size={24} />} label="Cartões" />
       </nav>
 
-      {isModalOpen && <LancamentoModal tipo={modalType} setTipo={setModalType} editItem={editItem} onClose={() => {setIsModalOpen(false); setEditItem(null);}} onSave={handleGravarDados} meusBancos={meusBancos} />}
+      {isModalOpen && <LancamentoModal tipo={modalType} setTipo={setModalType} editItem={editItem} onClose={() => {setIsModalOpen(false); setEditItem(null);}} onSave={handleGravarDados} meusBancos={meusBancos} setCustomDialog={setCustomDialog} />}
     </main>
   );
 }
@@ -519,7 +506,11 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, liveCrypto, o
               <div key={idx} className="p-5 bg-slate-900 border border-slate-800 rounded-[2rem]">
                 <div className="flex justify-between items-start mb-4">
                   <div><p className="font-black text-lg uppercase text-slate-100">{nome}</p><p className="text-[10px] font-bold text-slate-500 uppercase">{subTipo} • Taxa: {taxa} {taxa > 20 ? '% CDI' : '% a.m'}</p></div>
-                  <div className="flex gap-2"><button onClick={() => onEdit(i)} className="bg-slate-800 p-3 rounded-xl text-blue-400 active:scale-90"><Edit size={20}/></button><button onClick={() => onDelete(i.linha, 'DB_Investimentos_Fixos')} className="bg-slate-800 p-3 rounded-xl text-red-400 active:scale-90"><Trash2 size={20}/></button></div>
+                  <div className="flex gap-2">
+                     <button onClick={() => onEdit(i, 'resgate', 'Renda Fixa')} className="bg-slate-800 p-3 rounded-xl text-emerald-400 active:scale-90" title="Resgatar"><HandCoins size={20}/></button>
+                     <button onClick={() => onEdit(i, 'edit')} className="bg-slate-800 p-3 rounded-xl text-blue-400 active:scale-90"><Edit size={20}/></button>
+                     <button onClick={() => onDelete(i.linha, 'DB_Investimentos_Fixos')} className="bg-slate-800 p-3 rounded-xl text-red-400 active:scale-90"><Trash2 size={20}/></button>
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4 border-t border-slate-800 pt-4 mt-2">
                   <div><p className="text-[8px] font-black text-slate-500 uppercase">Aplicado em {formatDateToBR(dataApp)}</p><p className="text-sm font-black text-slate-300">R$ {vA.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
@@ -542,7 +533,10 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, liveCrypto, o
             <div key={idx} className="p-5 bg-slate-900 border border-slate-800 rounded-[2rem]">
               <div className="flex justify-between items-start mb-4">
                 <div><p className="font-black text-lg uppercase text-slate-100">{ticker}</p><p className="text-[10px] font-bold text-slate-500 uppercase">Qtd: {qtd} • PM: R$ {precoMedio.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
-                {i.isHist && ( <div className="text-[9px] bg-amber-900/30 text-amber-500 px-2 py-1 rounded-lg flex items-center gap-1 h-min"><History size={12}/> Histórico Binance</div> )}
+                <div className="flex gap-2 items-center">
+                   {i.isHist && ( <div className="text-[9px] bg-amber-900/30 text-amber-500 px-2 py-1 rounded-lg flex items-center gap-1 h-min mr-2"><History size={12}/> Histórico Binance</div> )}
+                   <button onClick={() => onEdit(i, 'resgate', tipo)} className="bg-slate-800 p-3 rounded-xl text-emerald-400 active:scale-90" title="Vender/Resgatar"><HandCoins size={20}/></button>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-4 border-t border-slate-800 pt-4 mt-2">
                 <div><p className="text-[8px] font-black text-slate-500 uppercase">Investido (Custo)</p><p className="text-sm font-black text-slate-300">R$ {custoTotal.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
@@ -739,11 +733,9 @@ function RolagemModal({ item, totalAtual, onClose, onSave }) {
   );
 }
 
-// NOVA TELA DE CARTÕES AGRUPADA POR BANCO
-function CartoesView({ items, infoBancos, mesAtual, anoAtual, onEdit, onDelete, onStatusChange }) {
+function CartoesView({ items, onEdit, onDelete, onStatusChange }) {
   let totalGeral = 0;
   
-  // Ordena os itens (Pagos vão para baixo, Data organiza os pendentes)
   const ordenados = [...items].sort((a, b) => {
     const aPago = safeString(a.dados[11]).toUpperCase() === 'PAGO';
     const bPago = safeString(b.dados[11]).toUpperCase() === 'PAGO';
@@ -770,23 +762,9 @@ function CartoesView({ items, infoBancos, mesAtual, anoAtual, onEdit, onDelete, 
      cartoesPorBanco[banco].items.push(i);
   });
 
-  // Calcula o Vencimento exato da Fatura do Banco para o Mês Selecionado
-  const getVencimentoStr = (bancoNome) => {
-      const info = infoBancos[bancoNome];
-      if (!info) return '--/--/----';
-      let mVenc = mesAtual;
-      let aVenc = anoAtual;
-      if (info.vencimento < info.fechamento) {
-          mVenc++;
-          if (mVenc > 11) { mVenc = 0; aVenc++; }
-      }
-      return `${String(info.vencimento).padStart(2, '0')}/${String(mVenc + 1).padStart(2, '0')}/${aVenc}`;
-  };
-
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       
-      {/* Resumo Total das Faturas e Categorias */}
       <div className="bg-indigo-900/20 border border-indigo-500/20 p-8 rounded-[2.5rem] shadow-xl">
         <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1">Gasto Total com Cartões</p>
         <p className="text-4xl font-black text-white tracking-tighter">R$ {totalGeral.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
@@ -803,15 +781,16 @@ function CartoesView({ items, infoBancos, mesAtual, anoAtual, onEdit, onDelete, 
          <p className="text-xs text-slate-600 italic">Sem registos neste mês.</p> 
       ) : (
          Object.keys(cartoesPorBanco).map(banco => {
-           const vencimentoStr = getVencimentoStr(banco);
+           // Procura a data de vencimento da fatura no primeiro item para mostrar no título
+           const primeiraFatura = cartoesPorBanco[banco].items[0] ? parseDataBR(cartoesPorBanco[banco].items[0].dados[5]) : null;
+           const vencimentoStr = primeiraFatura ? formatDateToBR(primeiraFatura) : '--/--/----';
            
            return (
               <div key={banco} className="bg-slate-900 border border-slate-800 rounded-[2rem] overflow-hidden mb-6">
-                 {/* Cabeçalho do Banco */}
                  <div className="bg-slate-800/40 p-5 border-b border-slate-800 flex justify-between items-center">
                     <div>
                        <h4 className="font-black text-indigo-400 uppercase text-lg">{banco}</h4>
-                       <p className="text-[9px] font-bold text-slate-500 uppercase mt-1">Vencimento: {vencimentoStr}</p>
+                       <p className="text-[9px] font-bold text-slate-500 uppercase mt-1">Fatura: {vencimentoStr}</p>
                     </div>
                     <div className="text-right">
                        <p className="text-[8px] text-slate-500 font-bold uppercase">Total da Fatura</p>
@@ -819,11 +798,11 @@ function CartoesView({ items, infoBancos, mesAtual, anoAtual, onEdit, onDelete, 
                     </div>
                  </div>
 
-                 {/* Lista de Transações daquele Banco */}
                  <div className="p-3 space-y-2">
                     {cartoesPorBanco[banco].items.map((i, idx) => {
                        const isPago = safeString(i.dados[11]).toUpperCase() === 'PAGO';
-                       const dataTx = parseDataBR(i.dados[5]);
+                       const dFatura = parseDataBR(i.dados[5]);
+                       const dCompraStr = safeString(i.dados[12]); // Nova data opcional
                        
                        let badgeText = "Pendente";
                        let badgeColor = "bg-slate-800 text-slate-500";
@@ -831,9 +810,9 @@ function CartoesView({ items, infoBancos, mesAtual, anoAtual, onEdit, onDelete, 
                        if (isPago) {
                           badgeText = "Pago";
                           badgeColor = "bg-emerald-900/30 text-emerald-500";
-                       } else if (dataTx) {
+                       } else if (dFatura) {
                           const hoje = new Date(); hoje.setHours(0,0,0,0);
-                          const d = new Date(dataTx); d.setHours(0,0,0,0);
+                          const d = new Date(dFatura); d.setHours(0,0,0,0);
                           const diffDias = Math.round((d.getTime() - hoje.getTime()) / (1000 * 3600 * 24));
                           
                           if (diffDias > 0) { badgeText = "Agendado"; badgeColor = "bg-blue-900/30 text-blue-400"; }
@@ -847,7 +826,7 @@ function CartoesView({ items, infoBancos, mesAtual, anoAtual, onEdit, onDelete, 
                               <div className={`w-10 h-10 rounded-2xl border flex items-center justify-center ${isPago ? 'border-emerald-500/20 text-emerald-500' : 'border-indigo-500/20 text-indigo-400'}`}><CreditCard size={18}/></div>
                               <div>
                                  <p className="text-sm font-black">{i.dados[8]}</p>
-                                 <p className="text-[9px] text-slate-500 uppercase">{i.dados[9]} • {formatDateToBR(dataTx)}</p>
+                                 <p className="text-[9px] text-slate-500 uppercase">{i.dados[9]} {dCompraStr ? `• Compra: ${dCompraStr}` : ''}</p>
                                  <span className={`text-[8px] px-2 py-0.5 rounded-md mt-1 inline-block uppercase font-black ${badgeColor}`}>{badgeText}</span>
                               </div>
                            </div>
@@ -873,18 +852,28 @@ function CartoesView({ items, infoBancos, mesAtual, anoAtual, onEdit, onDelete, 
   );
 }
 
-function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem }) {
+function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem, setCustomDialog }) {
   const [formData, setFormData] = useState({ data: new Date().toISOString().split('T')[0], dataVenc: new Date().toISOString().split('T')[0], banco: meusBancos[0] || 'Dinheiro', ativoTipo: 'Ação', subTipo: 'CDB', nome: '', valor: '', juros: '', he50: '', he100: '', dsr: '', adNoturno: '', outros: '', descontos: '', isFixo: false, categoria: '' });
   
   useEffect(() => {
     if (editItem) {
       const d = editItem.dados; const toInp = (s) => parseDataBR(s) ? parseDataBR(s).toISOString().split('T')[0] : '';
       if (tipo === 'devedor') setFormData(p => ({...p, data: toInp(d[5]), nome: d[6], valor: parseCurrency(d[7]), dataVenc: toInp(d[8]), juros: parseCurrency(d[10])}));
-      else if (tipo === 'cartao') setFormData(p => ({...p, data: toInp(d[5]), isFixo: safeString(d[6]).toUpperCase()==='FIXO', valor: parseCurrency(d[7]), nome: d[8], categoria: d[9], banco: d[10]}));
+      else if (tipo === 'cartao') setFormData(p => ({...p, dataVenc: toInp(d[5]), isFixo: safeString(d[6]).toUpperCase()==='FIXO', valor: parseCurrency(d[7]), nome: d[8], categoria: d[9], banco: d[10], data: toInp(d[12]||"") })); // dataVenc = Fatura, data = Compra
       else if (tipo === 'salario') setFormData(p => ({...p, data: toInp(d[5]), valor: parseCurrency(d[6]), he50: parseCurrency(d[7]), he100: parseCurrency(d[8]), descontos: parseCurrency(d[10])})); 
       else if (tipo === 'ativo') {
          const isFixa = d[9] ? safeString(d[9]).includes('CDB') || safeString(d[9]).includes('CDI') || safeString(d[9]).includes('Tesouro') : false;
          setFormData(p => ({...p, data: toInp(d[5]), dataVenc: toInp(d[6]), nome: d[7] || d[0], valor: parseCurrency(d[8] || d[2]), juros: parseCurrency(d[9] || d[3]), ativoTipo: isFixa ? 'Renda Fixa' : (d[9] || 'Ação'), subTipo: d[10] || 'CDB'}));
+      }
+      else if (tipo === 'resgate') {
+         const isFixa = formData.ativoTipo === 'Renda Fixa';
+         setFormData(p => ({
+            ...p, 
+            nome: isFixa ? editItem.dados[7] : editItem.dados[0], 
+            valor: isFixa ? parseCurrency(editItem.dados[8]) : parseCurrency(editItem.dados[6]),
+            juros: isFixa ? '' : parseCurrency(editItem.dados[2]), // juros usado como QTD na variável
+            data: new Date().toISOString().split('T')[0]
+         }));
       }
     }
   }, [editItem, tipo]);
@@ -894,15 +883,15 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
   return (
     <div className="fixed inset-0 bg-black/95 backdrop-blur-md z-[100] flex items-end md:items-center justify-center p-4">
       <div className="bg-slate-900 w-full max-w-md rounded-[3rem] border border-slate-800 p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
-        <div className="flex justify-between items-center mb-8"><h3 className="font-black text-xl text-emerald-500">{editItem ? `Editar ${tipo}` : 'Novo Lançamento'}</h3><button onClick={onClose} className="p-3 bg-slate-800 rounded-full text-slate-500"><X size={24}/></button></div>
+        <div className="flex justify-between items-center mb-8"><h3 className="font-black text-xl text-emerald-500">{editItem ? (tipo === 'resgate' ? 'Resgatar Ativo' : `Editar ${tipo}`) : 'Novo Lançamento'}</h3><button onClick={onClose} className="p-3 bg-slate-800 rounded-full text-slate-500"><X size={24}/></button></div>
         {tipo === 'escolha' ? (
           <div className="grid grid-cols-2 gap-3"><ChoiceBtn onClick={() => setTipo('salario')} icon={<Banknote size={32} className="text-blue-400"/>} label="Salário" /><ChoiceBtn onClick={() => setTipo('cartao')} icon={<CreditCard size={32} className="text-indigo-400"/>} label="Gastos" /><ChoiceBtn onClick={() => setTipo('ativo')} icon={<Wallet size={32} className="text-emerald-400"/>} label="Ativos" /><ChoiceBtn onClick={() => setTipo('devedor')} icon={<Users size={32} className="text-amber-400"/>} label="Devedor" /><ChoiceBtn onClick={() => setTipo('provento')} icon={<Coins size={32} className="text-yellow-400"/>} label="Receber Provento" /></div>
         ) : (
           <form className="space-y-4" onSubmit={(e) => {
-            e.preventDefault(); const dBR = formData.data.split('-').reverse().join('/'); const vBR = formData.dataVenc.split('-').reverse().join('/');
+            e.preventDefault(); const dBR = formData.data ? formData.data.split('-').reverse().join('/') : ""; const vBR = formData.dataVenc.split('-').reverse().join('/');
             let p = []; let aba = "";
             if (tipo === 'devedor') { aba = 'bdDevedores'; p = [dBR, formData.nome, parseCurrency(formData.valor), vBR, editItem?.dados[9]||"Pendente", parseCurrency(formData.juros), "App"]; }
-            else if (tipo === 'cartao') { aba = 'bdLancamentos'; p = [dBR, formData.isFixo?"Fixo":"Avulso", parseCurrency(formData.valor), formData.nome, formData.categoria, formData.banco, editItem?.dados[11]||"Pendente"]; }
+            else if (tipo === 'cartao') { aba = 'bdLancamentos'; p = [vBR, formData.isFixo?"Fixo":"Avulso", parseCurrency(formData.valor), formData.nome, formData.categoria, formData.banco, editItem?.dados[11]||"Pendente", dBR]; }
             else if (tipo === 'ativo') { 
               if (formData.ativoTipo === 'Renda Fixa') { aba = 'DB_Investimentos_Fixos'; p = [dBR, vBR, formData.nome, parseCurrency(formData.valor), parseCurrency(formData.juros), formData.subTipo, "", ""]; }
               else { aba = 'DB_Historico_Ordens'; p = [dBR, formData.nome.toUpperCase(), "COMPRA", parseCurrency(formData.valor), parseCurrency(formData.juros), formData.ativoTipo, ""]; }
@@ -911,13 +900,47 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
             } else if (tipo === 'salario') {
               aba = 'bdRendas'; const b = parseCurrency(formData.valor); const h5 = parseCurrency(formData.he50); const h1 = parseCurrency(formData.he100); const dsr = parseCurrency(formData.dsr); const adN = parseCurrency(formData.adNoturno); const out = parseCurrency(formData.outros); const d = parseCurrency(formData.descontos);
               p = [dBR, b, h5, h1, dsr+adN+out, d, b+h5+h1+(dsr+adN+out)-d];
+            } else if (tipo === 'resgate') {
+               if (formData.ativoTipo === 'Renda Fixa') {
+                  const resgateVal = parseCurrency(formData.valor);
+                  // 1. Lança no historico para virar Caixa
+                  onSave([dBR, formData.nome, "RESGATE", 1, resgateVal, "Renda Fixa", ""], 'DB_Historico_Ordens', null, true);
+                  
+                  // 2. Desconta do Montante Aplicado Original
+                  const novoPrincipal = parseCurrency(editItem.dados[8]) - resgateVal;
+                  if (novoPrincipal > 0) {
+                     p = [editItem.dados[5], editItem.dados[6], editItem.dados[7], novoPrincipal, editItem.dados[9], editItem.dados[10], "", ""];
+                     aba = 'DB_Investimentos_Fixos';
+                  } else {
+                     onClose();
+                     setCustomDialog({ type: 'delete', aba: 'DB_Investimentos_Fixos', linha: editItem.linha, message: 'O valor resgatado zera o título. Deseja apagar a aplicação?' });
+                     return;
+                  }
+               } else {
+                  const qtdVendida = parseCurrency(formData.juros);
+                  const valRecebido = parseCurrency(formData.valor);
+                  const precoVenda = valRecebido / (qtdVendida || 1);
+                  aba = 'DB_Historico_Ordens'; p = [dBR, formData.nome.toUpperCase(), "VENDA", qtdVendida, precoVenda, formData.ativoTipo, ""];
+               }
             }
             onSave(p, aba, editItem?.linha);
           }}>
             {tipo === 'salario' ? (
               <><input type="number" step="any" placeholder="Base R$" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><div className="grid grid-cols-2 gap-3"><input type="number" step="any" placeholder="HE 50%" value={formData.he50} className={inputClass} onChange={e => setFormData({...formData, he50: e.target.value})} /><input type="number" step="any" placeholder="HE 100%" value={formData.he100} className={inputClass} onChange={e => setFormData({...formData, he100: e.target.value})} /></div><div className="grid grid-cols-3 gap-2"><input type="number" step="any" placeholder="DSR" value={formData.dsr} className={inputClass} onChange={e => setFormData({...formData, dsr: e.target.value})} /><input type="number" step="any" placeholder="Noturno" value={formData.adNoturno} className={inputClass} onChange={e => setFormData({...formData, adNoturno: e.target.value})} /><input type="number" step="any" placeholder="Outros" value={formData.outros} className={inputClass} onChange={e => setFormData({...formData, outros: e.target.value})} /></div><input type="number" step="any" placeholder="Descontos" value={formData.descontos} className={`${inputClass} text-red-400`} onChange={e => setFormData({...formData, descontos: e.target.value})} /></>
             ) : tipo === 'cartao' ? (
-              <><input type="text" placeholder="Descrição" value={formData.nome} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required /><div className="grid grid-cols-2 gap-4"><input type="number" step="any" placeholder="Valor" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><input type="text" placeholder="Categoria" value={formData.categoria} className={inputClass} onChange={e => setFormData({...formData, categoria: e.target.value})} required /></div><select className={`${inputClass} appearance-none`} value={formData.banco} onChange={e => setFormData({...formData, banco: e.target.value})}>{meusBancos.map((b, i) => <option key={i} value={b}>{b}</option>)}</select></>
+              <>
+                 <input type="text" placeholder="Descrição da Compra" value={formData.nome} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required />
+                 <div className="grid grid-cols-2 gap-4"><input type="number" step="any" placeholder="Valor" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><input type="text" placeholder="Categoria" value={formData.categoria} className={inputClass} onChange={e => setFormData({...formData, categoria: e.target.value})} required /></div>
+                 <select className={`${inputClass} appearance-none`} value={formData.banco} onChange={e => setFormData({...formData, banco: e.target.value})}>{meusBancos.map((b, i) => <option key={i} value={b}>{b}</option>)}</select>
+                 <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Mês/Data da Fatura (Ex: 10/06/2026) *</span>
+                    <input type="date" value={formData.dataVenc} className={`${inputClass} !bg-slate-900 border-none !p-2 text-amber-500`} onChange={e => setFormData({...formData, dataVenc: e.target.value})} required />
+                 </div>
+                 <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Data da Compra (Opcional)</span>
+                    <input type="date" value={formData.data} className={`${inputClass} !bg-slate-900 border-none !p-2 text-emerald-500`} onChange={e => setFormData({...formData, data: e.target.value})} />
+                 </div>
+              </>
             ) : tipo === 'devedor' ? (
               <>
                  <input type="text" placeholder="Cliente" value={formData.nome} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required />
@@ -943,7 +966,26 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
                  </div>
                  <input type="text" placeholder="Ticker (ex: ITSA4)" value={formData.nome} className={`${inputClass} uppercase`} onChange={e => setFormData({...formData, nome: e.target.value})} required />
                  <input type="number" step="any" placeholder="Valor Total Recebido (R$)" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
+                 <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800"><span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Data do Recebimento</span><input type="date" value={formData.data} className={`${inputClass} !bg-slate-900 border-none !p-2 text-emerald-500`} onChange={e => setFormData({...formData, data: e.target.value})} /></div>
               </>
+            ) : tipo === 'resgate' ? (
+               <>
+                 {formData.ativoTipo === 'Renda Fixa' ? (
+                    <>
+                      <p className="text-[10px] text-slate-500 mb-2 font-bold uppercase tracking-widest">Resgate de {formData.nome}</p>
+                      <input type="number" step="any" placeholder="Valor a Resgatar (R$)" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
+                    </>
+                 ) : (
+                    <>
+                      <p className="text-[10px] text-slate-500 mb-2 font-bold uppercase tracking-widest">Venda de {formData.nome}</p>
+                      <div className="grid grid-cols-2 gap-4">
+                          <input type="number" step="any" placeholder="Qtd Vendida" value={formData.juros} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required />
+                          <input type="number" step="any" placeholder="Valor Total Recebido (R$)" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
+                      </div>
+                    </>
+                 )}
+                 <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 mt-4"><span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Data da Operação</span><input type="date" value={formData.data} className={`${inputClass} !bg-slate-900 border-none !p-2 text-emerald-500`} onChange={e => setFormData({...formData, data: e.target.value})} /></div>
+               </>
             ) : (
               <>
                 <div className="flex bg-slate-950 p-1 rounded-2xl mb-4 gap-1">
@@ -964,19 +1006,12 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
                 {formData.ativoTipo === 'Renda Fixa' && (
                   <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800"><span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Data de Vencimento</span><input type="date" value={formData.dataVenc} className={`${inputClass} !bg-slate-900 border-none !p-2 text-amber-500`} onChange={e => setFormData({...formData, dataVenc: e.target.value})} /></div>
                 )}
+                
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800"><span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">{formData.ativoTipo === 'Renda Fixa' ? 'Data da Aplicação' : 'Data da Transação'}</span><input type="date" value={formData.data} className={`${inputClass} !bg-slate-900 border-none !p-2 text-emerald-500`} onChange={e => setFormData({...formData, data: e.target.value})} /></div>
               </>
             )}
 
-            {tipo !== 'devedor' && (
-               <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">
-                     {tipo === 'ativo' && formData.ativoTipo === 'Renda Fixa' ? 'Data da Aplicação' : (tipo === 'provento' ? 'Data do Recebimento' : 'Data da Transação')}
-                  </span>
-                  <input type="date" value={formData.data} className={`${inputClass} !bg-slate-900 border-none !p-2 text-emerald-500`} onChange={e => setFormData({...formData, data: e.target.value})} />
-               </div>
-            )}
-            
-            <button type="submit" className="w-full bg-emerald-600 text-white py-6 rounded-3xl font-black uppercase tracking-widest text-xs mt-4 active:scale-95 transition-all">{editItem ? "Atualizar Registo" : "Salvar Lançamento"}</button>
+            <button type="submit" className="w-full bg-emerald-600 text-white py-6 rounded-3xl font-black uppercase tracking-widest text-xs mt-4 active:scale-95 transition-all">{editItem && tipo !== 'resgate' ? "Atualizar Registo" : "Salvar Lançamento"}</button>
           </form>
         )}
       </div>
