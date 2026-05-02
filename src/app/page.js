@@ -4,28 +4,34 @@ import { useState } from 'react';
 import { 
   Wallet, TrendingUp, ArrowUpCircle, ArrowDownCircle, 
   PieChart, LayoutDashboard, Receipt, Users, PlusCircle,
-  CreditCard, Landmark, Car
+  Landmark, Car, X, CheckCircle, Trash2
 } from 'lucide-react';
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // Estados dos formulários dinâmicos
+  const [formData, setFormData] = useState({
+    nome: '', valor: '', data: '', prazo: '', juros: '', status: 'Pendente', obs: ''
+  });
+
+  const handleLancar = () => {
+    // Aqui entrará o fetch para a API enviando { action: 'adicionar', dados: [...] }
+    console.log("Enviando para a planilha:", activeTab, formData);
+    setIsModalOpen(false);
+    setFormData({ nome: '', valor: '', data: '', prazo: '', juros: '', status: 'Pendente', obs: '' });
+  };
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-50 pb-24 font-sans">
-      
-      {/* Header Fixo */}
+    <main className="min-h-screen bg-slate-950 text-slate-50 pb-24 font-sans relative">
       <header className="sticky top-0 z-10 bg-slate-950/80 backdrop-blur-md border-b border-slate-800/60 p-4 md:p-8 flex justify-between items-center">
         <div>
           <h1 className="text-xl md:text-2xl font-black tracking-tight text-emerald-500">APPFINANCE.PRO</h1>
-          <p className="text-slate-400 text-[10px] md:text-xs uppercase tracking-widest font-bold">Gestão Pessoal & Ativos</p>
-        </div>
-        <div className="bg-slate-900 border border-slate-800 px-3 py-1.5 md:px-4 md:py-2 rounded-full flex items-center gap-2">
-          <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
-          <span className="text-[9px] md:text-[10px] font-bold text-slate-300">ONLINE</span>
+          <p className="text-slate-400 text-[10px] uppercase tracking-widest font-bold">Autonomia Total</p>
         </div>
       </header>
 
-      {/* Área de Conteúdo Dinâmico */}
       <div className="p-4 md:p-8">
         {activeTab === 'dashboard' && <DashboardView />}
         {activeTab === 'patrimonio' && <PatrimonioView />}
@@ -33,13 +39,15 @@ export default function Dashboard() {
         {activeTab === 'receber' && <AReceberView />}
       </div>
 
-      {/* Menu de Navegação Inferior (Mobile First) */}
-      <nav className="fixed bottom-0 w-full bg-slate-950 border-t border-slate-800 flex justify-around items-center p-3 z-50 px-2 md:px-8 pb-safe">
+      {/* Botão Flutuante Central que abre o Modal de Lançamento */}
+      <nav className="fixed bottom-0 w-full bg-slate-950 border-t border-slate-800 flex justify-around items-center p-3 z-40 px-2 pb-safe">
         <NavButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon={<LayoutDashboard size={20} />} label="Início" />
         <NavButton active={activeTab === 'patrimonio'} onClick={() => setActiveTab('patrimonio')} icon={<Landmark size={20} />} label="Patrimônio" />
         
-        {/* Botão Central de Novo Lançamento */}
-        <button className="bg-emerald-600 text-white p-4 rounded-full shadow-lg shadow-emerald-900/50 hover:scale-105 active:scale-95 transition-all -translate-y-4 border-4 border-slate-950">
+        <button 
+          onClick={() => setIsModalOpen(true)}
+          className="bg-emerald-600 text-white p-4 rounded-full shadow-lg shadow-emerald-900/50 hover:bg-emerald-500 active:scale-95 transition-all -translate-y-4 border-4 border-slate-950 flex-shrink-0"
+        >
           <PlusCircle size={24} />
         </button>
 
@@ -47,118 +55,131 @@ export default function Dashboard() {
         <NavButton active={activeTab === 'receber'} onClick={() => setActiveTab('receber')} icon={<Users size={20} />} label="A Receber" />
       </nav>
 
+      {/* Modal Dinâmico de Lançamento */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end md:items-center justify-center p-4">
+          <div className="bg-slate-900 w-full max-w-md rounded-[2rem] border border-slate-800 p-6 animate-in slide-in-from-bottom-10">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="font-black text-xl text-emerald-400">
+                {activeTab === 'patrimonio' ? 'Adicionar Ativo' : 
+                 activeTab === 'receber' ? 'Novo Devedor' : 
+                 activeTab === 'contas' ? 'Nova Conta Fixa' : 'Novo Lançamento'}
+              </h3>
+              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-white p-2 bg-slate-950 rounded-full"><X size={20}/></button>
+            </div>
+
+            <div className="space-y-4">
+              <input type="text" placeholder="Descrição / Nome" className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-white focus:border-emerald-500 outline-none" value={formData.nome} onChange={(e) => setFormData({...formData, nome: e.target.value})} />
+              
+              <div className="flex gap-4">
+                <input type="number" placeholder="Valor (R$)" className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-white focus:border-emerald-500 outline-none" value={formData.valor} onChange={(e) => setFormData({...formData, valor: e.target.value})} />
+                
+                {/* Campos Específicos por Aba */}
+                {(activeTab === 'receber' || activeTab === 'contas') && (
+                  <input type="date" className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-slate-400 focus:border-emerald-500 outline-none" value={formData.prazo} onChange={(e) => setFormData({...formData, prazo: e.target.value})} />
+                )}
+              </div>
+
+              {activeTab === 'receber' && (
+                <input type="text" placeholder="Juros (%) ou Multa Combinada" className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-white focus:border-emerald-500 outline-none" value={formData.juros} onChange={(e) => setFormData({...formData, juros: e.target.value})} />
+              )}
+
+              {activeTab === 'contas' && (
+                <select className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-white focus:border-emerald-500 outline-none" value={formData.status} onChange={(e) => setFormData({...formData, status: e.target.value})}>
+                  <option value="Pendente">Pendente</option>
+                  <option value="Pago">Pago</option>
+                </select>
+              )}
+
+              <button onClick={handleLancar} className="w-full bg-emerald-600 text-white font-black py-4 rounded-xl hover:bg-emerald-500 transition-colors mt-4">
+                SALVAR NA PLANILHA
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
 
-/* =========================================
-   VISÕES (TABS)
-========================================= */
-
-function DashboardView() {
+// Sub-componente: Visão da Aba Contas (Com Toggle de Pago/Pendente)
+function ContasFixasView() {
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-5 mb-8">
-        <StatCard title="Saldo Total" value="R$ 15.430,00" icon={<Wallet size={18} className="text-emerald-500" />} />
-        <StatCard title="A Receber" value="R$ 1.240,00" icon={<Users size={18} className="text-blue-400" />} color="text-blue-400" />
-        <StatCard title="Entradas" value="R$ 4.500,00" icon={<ArrowUpCircle size={18} className="text-emerald-400" />} />
-        <StatCard title="Saídas Mês" value="R$ 2.200,00" icon={<ArrowDownCircle size={18} className="text-red-400" />} color="text-red-400" />
-      </section>
-
-      <div className="bg-slate-900/40 border border-slate-800/60 rounded-3xl p-6 min-h-[300px] flex flex-col">
-        <h2 className="text-md md:text-lg font-bold flex items-center gap-2 mb-4">
-          <PieChart className="w-5 h-5 text-emerald-500" /> Resumo do Patrimônio
-        </h2>
-        <div className="flex-1 flex items-center justify-center border-2 border-dashed border-slate-800 rounded-2xl">
-          <span className="text-slate-600 text-sm italic text-center px-4">Gráfico de alocação (Ações, Veículos, Caixa)</span>
-        </div>
+      <h2 className="text-xl font-bold mb-6 flex items-center gap-2"><Receipt className="text-red-400"/> Contas do Mês</h2>
+      <div className="space-y-4">
+        <EditableItemCard icon={<Receipt className="text-red-400" />} title="Faculdade Estácio" subtitle="Venc: 10/05" value="R$ 450,00" initialStatus="Pendente" />
+        <EditableItemCard icon={<Car className="text-slate-400" />} title="IPVA Gol G6" subtitle="Venc: 15/05" value="R$ 300,00" initialStatus="Pago" />
       </div>
     </div>
   );
 }
 
+// Sub-componente: Visão da Aba Devedores
+function AReceberView() {
+  return (
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <h2 className="text-xl font-bold mb-6 flex items-center gap-2"><Users className="text-blue-400"/> Gestão de Cobranças</h2>
+      <div className="space-y-4">
+        <EditableItemCard icon={<Users className="text-blue-400"/>} title="Peças Gol G6 (João)" subtitle="Prazo: 15/05 | Juros: 5%" value="R$ 350,00" initialStatus="Pendente" isReceber={true} />
+      </div>
+    </div>
+  );
+}
+
+// Sub-componente: Visão de Patrimônio (Com botão de excluir)
 function PatrimonioView() {
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
       <h2 className="text-xl font-bold mb-6 flex items-center gap-2"><Landmark className="text-emerald-500"/> Meus Ativos</h2>
       <div className="space-y-4">
-        <ItemCard icon={<TrendingUp />} title="Ações B3 (Vale, Bradesco, Itaúsa)" subtitle="Renda Variável" value="R$ 8.500,00" />
-        <ItemCard icon={<Landmark />} title="FIIs (Banco Inter)" subtitle="Fundos Imobiliários" value="R$ 3.200,00" />
-        <ItemCard icon={<Car />} title="Veículos" subtitle="Honda Civic / VW Gol" value="R$ 85.000,00" />
-        <ItemCard icon={<Wallet />} title="Reserva de Emergência" subtitle="CDB / Poupança" value="R$ 5.000,00" />
+        <RemovableItemCard title="VALE3 - Banco Inter" value="R$ 8.500,00" subtitle="Atualizado hoje" />
       </div>
     </div>
   );
 }
 
-function ContasFixasView() {
-  return (
-    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <h2 className="text-xl font-bold mb-6 flex items-center gap-2"><Receipt className="text-red-400"/> Contas Fixas</h2>
-      <div className="space-y-4">
-        <ItemCard icon={<Receipt className="text-red-400" />} title="Faculdade Estácio" subtitle="Venc. dia 10" value="R$ 450,00" alert />
-        <ItemCard icon={<CreditCard className="text-red-400" />} title="Cartão de Crédito" subtitle="Fatura atual" value="R$ 1.200,00" alert />
-        <ItemCard icon={<Car className="text-red-400" />} title="Manutenção / IPVA" subtitle="Provisão mensal" value="R$ 300,00" alert />
-      </div>
-    </div>
-  );
-}
+// Componentes Reutilizáveis de UI
+function EditableItemCard({ icon, title, subtitle, value, initialStatus, isReceber }) {
+  const [status, setStatus] = useState(initialStatus);
+  const color = status === 'Pago' ? 'text-emerald-500' : isReceber ? 'text-blue-400' : 'text-red-400';
 
-function AReceberView() {
   return (
-    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <h2 className="text-xl font-bold mb-6 flex items-center gap-2"><Users className="text-blue-400"/> Quem me Deve</h2>
-      <div className="space-y-4">
-        <ItemCard icon={<Users className="text-blue-400"/>} title="Empréstimo João" subtitle="Restam 2 parcelas" value="R$ 500,00" />
-        <ItemCard icon={<Users className="text-blue-400"/>} title="Venda Peças Gol G6" subtitle="Pagamento prometido dia 15" value="R$ 350,00" />
-      </div>
-    </div>
-  );
-}
-
-/* =========================================
-   COMPONENTES AUXILIARES
-========================================= */
-
-function NavButton({ icon, label, active, onClick }) {
-  return (
-    <button 
-      onClick={onClick} 
-      className={`flex flex-col items-center gap-1 p-2 w-16 transition-colors ${active ? 'text-emerald-500' : 'text-slate-500 hover:text-slate-300'}`}
-    >
-      {icon}
-      <span className="text-[9px] font-bold tracking-wide">{label}</span>
-    </button>
-  );
-}
-
-function StatCard({ title, value, icon, color = "text-white" }) {
-  return (
-    <div className="bg-slate-900/40 border border-slate-800/60 p-4 md:p-6 rounded-2xl md:rounded-[2rem] hover:border-slate-700 transition-all">
-      <div className="flex justify-between items-start mb-2 md:mb-4">
-        <span className="text-slate-500 text-[9px] md:text-xs font-black uppercase tracking-widest break-words w-2/3">{title}</span>
-        <div className="bg-slate-950 p-1.5 md:p-2 rounded-lg">{icon}</div>
-      </div>
-      <span className={`text-base md:text-2xl font-black ${color} tracking-tight block truncate`}>{value}</span>
-    </div>
-  );
-}
-
-function ItemCard({ icon, title, subtitle, value, alert }) {
-  return (
-    <div className="flex items-center justify-between p-4 bg-slate-900/40 border border-slate-800/60 rounded-2xl hover:bg-slate-800/40 transition-colors">
-      <div className="flex items-center gap-4">
-        <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
-          {icon}
-        </div>
+    <div className={`p-4 bg-slate-900/40 border ${status === 'Pago' ? 'border-emerald-900/50 opacity-60' : 'border-slate-800'} rounded-2xl flex justify-between items-center transition-all`}>
+      <div className="flex gap-4 items-center">
+        <button 
+          onClick={() => setStatus(status === 'Pago' ? 'Pendente' : 'Pago')}
+          className={`p-3 rounded-xl border ${status === 'Pago' ? 'bg-emerald-900/20 border-emerald-500 text-emerald-500' : 'bg-slate-950 border-slate-700 text-slate-500'} transition-all`}
+        >
+          <CheckCircle size={20} />
+        </button>
         <div>
-          <h3 className="font-bold text-sm md:text-base">{title}</h3>
+          <h3 className={`font-bold text-sm ${status === 'Pago' ? 'line-through text-slate-500' : 'text-white'}`}>{title}</h3>
           <p className="text-xs text-slate-500">{subtitle}</p>
         </div>
       </div>
-      <span className={`font-black ${alert ? 'text-red-400' : 'text-slate-200'}`}>
-        {value}
-      </span>
+      <div className="flex flex-col items-end">
+        <span className={`font-black ${color}`}>{value}</span>
+        <span className="text-[10px] font-bold text-slate-600 uppercase mt-1">{status}</span>
+      </div>
     </div>
   );
 }
+
+function RemovableItemCard({ title, subtitle, value }) {
+  return (
+    <div className="p-4 bg-slate-900/40 border border-slate-800 rounded-2xl flex justify-between items-center group">
+      <div>
+        <h3 className="font-bold text-sm text-white">{title}</h3>
+        <p className="text-xs text-slate-500">{subtitle}</p>
+      </div>
+      <div className="flex items-center gap-4">
+        <span className="font-black text-white">{value}</span>
+        <button className="text-slate-600 hover:text-red-500 p-2 bg-slate-950 rounded-lg transition-colors"><Trash2 size={16} /></button>
+      </div>
+    </div>
+  );
+}
+
+function NavButton({ icon, label, active, onClick }) { return ( <button onClick={onClick} className={`flex flex-col items-center gap-1 p-2 w-16 transition-colors ${active ? 'text-emerald-500' : 'text-slate-500 hover:text-slate-300'}`}> {icon} <span className="text-[9px] font-bold tracking-wide">{label}</span> </button> ); }
+function DashboardView() { return ( <div className="text-center text-slate-500 mt-10 italic">Visão Geral (Em desenvolvimento: Gráficos serão injetados aqui via API)</div> ); }
