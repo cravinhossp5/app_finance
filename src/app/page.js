@@ -45,10 +45,11 @@ function formatDateToBR(dateObj) {
 }
 
 // Lógica de Viragem da Fatura baseada no dicionário dinâmico
-function getMesFatura(dataTx, bancoStr, dictFechamentos) {
+function getMesFatura(dataTx, bancoStr, infoBancos) {
   if (!dataTx) return null;
   const banco = safeString(bancoStr);
-  const diaFechamento = dictFechamentos[banco] || 31; 
+  const info = infoBancos[banco] || { fechamento: 31 };
+  const diaFechamento = info.fechamento;
   
   let m = dataTx.getMonth();
   let a = dataTx.getFullYear();
@@ -114,7 +115,7 @@ export default function Dashboard() {
   const [salarios, setSalarios] = useState([]);
   const [historicoOrdens, setHistoricoOrdens] = useState([]);
   const [meusBancos, setMeusBancos] = useState([]);
-  const [diasFechamento, setDiasFechamento] = useState({});
+  const [infoBancos, setInfoBancos] = useState({});
   const [cryptoLivePrices, setCryptoLivePrices] = useState({});
   
   const [clienteAtivo, setClienteAtivo] = useState(null);
@@ -155,16 +156,19 @@ export default function Dashboard() {
       
       if (bancosData?.success && bancosData.data) {
         const bl = [];
-        const dFechamento = {};
+        const dadosBancos = {};
         bancosData.data.forEach(b => {
            const nome = safeString(b.dados[0]);
            if (nome && nome.toLowerCase() !== "banco") {
               bl.push(nome);
-              dFechamento[nome] = parseInt(b.dados[1]) || 31; 
+              dadosBancos[nome] = {
+                 fechamento: parseInt(b.dados[1]) || 31,
+                 vencimento: parseInt(b.dados[2]) || 10
+              };
            }
         });
         setMeusBancos(bl.length > 0 ? bl : ['Dinheiro']);
-        setDiasFechamento(dFechamento);
+        setInfoBancos(dadosBancos);
       }
       setSyncStatus('synced');
     } catch (error) { setSyncStatus('error'); }
@@ -224,19 +228,18 @@ export default function Dashboard() {
   const cartoesDoMes = gastosCartao.filter(g => {
     const d = parseDataBR(g.dados[5]);
     const banco = g.dados[10]; 
-    const fatura = getMesFatura(d, banco, diasFechamento);
+    const fatura = getMesFatura(d, banco, infoBancos);
     return fatura && fatura.mes === mesAtual && fatura.ano === anoAtual;
   });
 
   const calcCaixaLivre = () => {
     let renda = 0; let saida = 0; let lucroCobrança = 0;
+    
     salarios.forEach(s => {
       const d = parseDataBR(s.dados[5]); if (d && d.getMonth() === mesAtual && d.getFullYear() === anoAtual) renda += parseCurrency(s.dados[11]);
     });
     
     cartoesDoMes.forEach(g => {
-       // Só desconta do caixa se não estiver pago ainda (opcional) ou considere tudo como compromisso.
-       // Vamos manter considerando tudo como saída prevista do mês para segurança:
        saida += parseCurrency(g.dados[7]);
     });
     
@@ -246,6 +249,7 @@ export default function Dashboard() {
       if (dAcordo && dAcordo.getMonth() === mesAtual && dAcordo.getFullYear() === anoAtual && status !== 'Concluído') saida += vOriginal; 
       if (status === 'Concluído' && dAcordo && dAcordo.getMonth() === mesAtual && dAcordo.getFullYear() === anoAtual) { renda += montanteFinal; lucroCobrança += (montanteFinal - vOriginal); }
     });
+    
     historicoOrdens.forEach(o => {
       const d = parseDataBR(o.dados[5]); 
       const tipoOp = safeString(o.dados[7]).toUpperCase();
@@ -256,7 +260,14 @@ export default function Dashboard() {
         if (tipoOp.includes('PROVENTO')) renda += parseCurrency(o.dados[9]); 
       }
     });
-    return { renda, saida, livre: renda - saida, lucroCobrança };
+
+    // Retorna valores redondos e exatos para evitar bugs de dízima no JS (ex: 64.987)
+    return { 
+      renda: Number(renda.toFixed(2)), 
+      saida: Number(saida.toFixed(2)), 
+      livre: Number((renda - saida).toFixed(2)), 
+      lucroCobrança: Number(lucroCobrança.toFixed(2)) 
+    };
   };
 
   const dadosCaixa = calcCaixaLivre();
@@ -321,8 +332,7 @@ export default function Dashboard() {
         {activeTab === 'devedores' && !clienteAtivo && <DevedoresView items={devedores} onAbrirCliente={setClienteAtivo} />}
         {activeTab === 'devedores' && clienteAtivo && <ClienteDossieView nome={clienteAtivo} items={devedores} onVoltar={() => setClienteAtivo(null)} onStatusChange={(i, s) => handleGravarDados([i.dados[5], i.dados[6], i.dados[7], i.dados[8], s, i.dados[10], i.dados[11]], 'bdDevedores', i.linha)} onEdit={i => abrirEdicao(i, 'devedor')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdDevedores', linha: l, message: 'A dívida será apagada permanentemente.' })} onRolar={(item, totalAtual) => setCustomDialog({ type: 'rolar', item, totalAtual })} />}
         
-        {/* Passando o onStatusChange para a CartoesView */}
-        {activeTab === 'cartoes' && <CartoesView items={cartoesDoMes} onEdit={i => abrirEdicao(i, 'cartao')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdLancamentos', linha: l, message: 'A despesa sumirá da fatura.' })} onStatusChange={(i, s) => handleGravarDados([i.dados[5], i.dados[6], i.dados[7], i.dados[8], i.dados[9], i.dados[10], s], 'bdLancamentos', i.linha)} />}
+        {activeTab === 'cartoes' && <CartoesView items={cartoesDoMes} infoBancos={infoBancos} mesAtual={mesAtual} anoAtual={anoAtual} onEdit={i => abrirEdicao(i, 'cartao')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdLancamentos', linha: l, message: 'A despesa sumirá da fatura.' })} onStatusChange={(i, s) => handleGravarDados([i.dados[5], i.dados[6], i.dados[7], i.dados[8], i.dados[9], i.dados[10], s], 'bdLancamentos', i.linha)} />}
       </div>
 
       <nav className="fixed bottom-0 w-full bg-slate-950/95 backdrop-blur-2xl border-t border-slate-800/50 flex justify-around items-center p-3 z-50 pb-safe">
@@ -353,10 +363,10 @@ function ResumoView({ dadosCaixa, salarios, hist, mes, ano, onEdit, onDelete }) 
     <div className="space-y-6 animate-in fade-in duration-300">
       <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/20 p-8 rounded-[2.5rem] shadow-xl relative overflow-hidden">
         <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-1">Caixa Livre (Mês)</p>
-        <p className={`text-4xl font-black ${dadosCaixa.livre >= 0 ? 'text-white' : 'text-red-400'}`}>R$ {dadosCaixa.livre.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+        <p className={`text-4xl font-black ${dadosCaixa.livre >= 0 ? 'text-white' : 'text-red-400'}`}>R$ {dadosCaixa.livre.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
         <div className="mt-6 flex gap-6 text-[10px] font-bold uppercase text-slate-500">
-          <div><span className="block text-blue-400 text-xs">R$ {dadosCaixa.renda.toLocaleString('pt-BR', {minimumFractionDigits:2})}</span>Entradas</div>
-          <div><span className="block text-red-400 text-xs">R$ {dadosCaixa.saida.toLocaleString('pt-BR', {minimumFractionDigits:2})}</span>Saídas</div>
+          <div><span className="block text-blue-400 text-xs">R$ {dadosCaixa.renda.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>Entradas</div>
+          <div><span className="block text-red-400 text-xs">R$ {dadosCaixa.saida.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>Saídas</div>
         </div>
       </div>
       
@@ -364,7 +374,7 @@ function ResumoView({ dadosCaixa, salarios, hist, mes, ano, onEdit, onDelete }) 
       {filtrados.length === 0 ? <p className="text-xs text-slate-600 italic">Sem registos neste mês.</p> : filtrados.map((item, idx) => (
         <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center">
           <div className="flex gap-4 items-center"><div className="w-10 h-10 rounded-2xl bg-blue-500/10 text-blue-400 flex items-center justify-center"><Banknote size={18}/></div><div><p className="text-sm font-black">Salário / Recebimento</p><p className="text-[9px] text-slate-500 uppercase">{formatDateToBR(parseDataBR(item.dados[5]))}</p></div></div>
-          <div className="flex items-center gap-4"><p className="text-sm font-black text-blue-400">R$ {parseCurrency(item.dados[11]).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+          <div className="flex items-center gap-4"><p className="text-sm font-black text-blue-400">R$ {parseCurrency(item.dados[11]).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
             <div className="flex gap-2">
               <button onClick={() => onEdit(item)} className="p-3 bg-slate-800 rounded-xl text-blue-400 active:scale-90"><Edit size={20}/></button>
               <button onClick={() => onDelete(item.linha)} className="p-3 bg-slate-800 rounded-xl text-red-400 active:scale-90"><Trash2 size={20}/></button>
@@ -377,7 +387,7 @@ function ResumoView({ dadosCaixa, salarios, hist, mes, ano, onEdit, onDelete }) 
       {proventosMes.length === 0 ? <p className="text-xs text-slate-600 italic">Nenhum dividendo caiu na conta ainda.</p> : proventosMes.map((item, idx) => (
         <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center">
           <div className="flex gap-4 items-center"><div className="w-10 h-10 rounded-2xl bg-yellow-500/10 text-yellow-500 flex items-center justify-center"><Coins size={18}/></div><div><p className="text-sm font-black uppercase">{item.dados[6]}</p><p className="text-[9px] text-slate-500 uppercase">Recebido em {formatDateToBR(parseDataBR(item.dados[5]))}</p></div></div>
-          <p className="text-sm font-black text-emerald-400">R$ {parseCurrency(item.dados[9]).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+          <p className="text-sm font-black text-emerald-400">R$ {parseCurrency(item.dados[9]).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
         </div>
       ))}
     </div>
@@ -428,20 +438,20 @@ function CarteiraView({ ativosVar, hist, ativosFixos, liveCrypto, onAbrirDetalhe
            <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Total em Carteira</p>
            {Object.keys(liveCrypto).length > 0 && <Activity size={14} className="text-emerald-500 animate-pulse" title="Cotações Binance Ao Vivo" />}
         </div>
-        <p className="text-4xl font-black text-white">R$ {(cValorMercado(acoes) + cValorMercado(fiis) + cValorMercado(criptoArr) + totalFixa).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+        <p className="text-4xl font-black text-white">R$ {(cValorMercado(acoes) + cValorMercado(fiis) + cValorMercado(criptoArr) + totalFixa).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
         
         <div className="grid grid-cols-2 gap-4 mt-6 pt-6 border-t border-indigo-500/20">
           <div>
             <p className="text-[9px] text-slate-500 uppercase font-black">Rendimentos (Variável)</p>
-            <p className="text-sm font-black text-violet-400">R$ {proventosVariavel.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+            <p className="text-sm font-black text-violet-400">R$ {proventosVariavel.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
           </div>
           <div className="text-right">
             <p className="text-[9px] text-slate-500 uppercase font-black">Rendimentos (Fixa)</p>
-            <p className="text-sm font-black text-blue-400">+R$ {rendimentoFixa.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+            <p className="text-sm font-black text-blue-400">+R$ {rendimentoFixa.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
           </div>
           <div className="col-span-2 text-center pt-2">
             <p className="text-[9px] text-slate-500 uppercase font-black">Total de Ganhos (Previstos + Juros)</p>
-            <p className="text-lg font-black text-emerald-400">R$ {(proventosVariavel + rendimentoFixa).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+            <p className="text-lg font-black text-emerald-400">R$ {(proventosVariavel + rendimentoFixa).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
           </div>
         </div>
       </div>
@@ -512,10 +522,10 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, liveCrypto, o
                   <div className="flex gap-2"><button onClick={() => onEdit(i)} className="bg-slate-800 p-3 rounded-xl text-blue-400 active:scale-90"><Edit size={20}/></button><button onClick={() => onDelete(i.linha, 'DB_Investimentos_Fixos')} className="bg-slate-800 p-3 rounded-xl text-red-400 active:scale-90"><Trash2 size={20}/></button></div>
                 </div>
                 <div className="grid grid-cols-2 gap-4 border-t border-slate-800 pt-4 mt-2">
-                  <div><p className="text-[8px] font-black text-slate-500 uppercase">Aplicado em {formatDateToBR(dataApp)}</p><p className="text-sm font-black text-slate-300">R$ {vA.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Juros (Bruto)</p><p className="text-sm font-black text-blue-400">+R$ {calc.lucro.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-                  <div><p className="text-[8px] font-black text-slate-500 uppercase">Imposto de Renda Retido</p><p className="text-sm font-black text-red-400">-R$ {calc.ir.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Líquido Disponível</p><p className="text-sm font-black text-emerald-400">R$ {calc.liquido.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+                  <div><p className="text-[8px] font-black text-slate-500 uppercase">Aplicado em {formatDateToBR(dataApp)}</p><p className="text-sm font-black text-slate-300">R$ {vA.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
+                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Juros (Bruto)</p><p className="text-sm font-black text-blue-400">+R$ {calc.lucro.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
+                  <div><p className="text-[8px] font-black text-slate-500 uppercase">Imposto de Renda Retido</p><p className="text-sm font-black text-red-400">-R$ {calc.ir.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
+                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Líquido Disponível</p><p className="text-sm font-black text-emerald-400">R$ {calc.liquido.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
                   {dataVenc && (
                     <div className="col-span-2 pt-2 border-t border-slate-800/50 mt-2"><p className="text-[8px] font-black text-slate-500 uppercase">Data de Vencimento</p><p className="text-xs font-black text-amber-500">{formatDateToBR(dataVenc)}</p></div>
                   )}
@@ -531,15 +541,15 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, liveCrypto, o
           return (
             <div key={idx} className="p-5 bg-slate-900 border border-slate-800 rounded-[2rem]">
               <div className="flex justify-between items-start mb-4">
-                <div><p className="font-black text-lg uppercase text-slate-100">{ticker}</p><p className="text-[10px] font-bold text-slate-500 uppercase">Qtd: {qtd} • PM: R$ {precoMedio.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+                <div><p className="font-black text-lg uppercase text-slate-100">{ticker}</p><p className="text-[10px] font-bold text-slate-500 uppercase">Qtd: {qtd} • PM: R$ {precoMedio.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
                 {i.isHist && ( <div className="text-[9px] bg-amber-900/30 text-amber-500 px-2 py-1 rounded-lg flex items-center gap-1 h-min"><History size={12}/> Histórico Binance</div> )}
               </div>
               <div className="grid grid-cols-2 gap-4 border-t border-slate-800 pt-4 mt-2">
-                <div><p className="text-[8px] font-black text-slate-500 uppercase">Investido (Custo)</p><p className="text-sm font-black text-slate-300">R$ {custoTotal.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-                <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Valor Atual (Mercado)</p><p className="text-sm font-black text-emerald-400">R$ {valorMercado.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-                <div><p className="text-[8px] font-black text-slate-500 uppercase">{tipo === 'Cripto' ? 'Valorização' : 'Lucro Absoluto'}</p><p className={`text-sm font-black ${lucroAbs >= 0 ? 'text-blue-400' : 'text-red-400'}`}>R$ {lucroAbs.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+                <div><p className="text-[8px] font-black text-slate-500 uppercase">Investido (Custo)</p><p className="text-sm font-black text-slate-300">R$ {custoTotal.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
+                <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Valor Atual (Mercado)</p><p className="text-sm font-black text-emerald-400">R$ {valorMercado.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
+                <div><p className="text-[8px] font-black text-slate-500 uppercase">{tipo === 'Cripto' ? 'Valorização' : 'Lucro Absoluto'}</p><p className={`text-sm font-black ${lucroAbs >= 0 ? 'text-blue-400' : 'text-red-400'}`}>R$ {lucroAbs.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
                 {tipo !== 'Cripto' && (
-                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Proventos Previstos</p><p className="text-sm font-black text-violet-400">R$ {provento.toLocaleString('pt-BR', {minimumFractionDigits:2})} • {dataProv || '--/--'}</p></div>
+                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Proventos Previstos</p><p className="text-sm font-black text-violet-400">R$ {provento.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})} • {dataProv || '--/--'}</p></div>
                 )}
               </div>
             </div>
@@ -572,10 +582,10 @@ function DevedoresView({ items, onAbrirCliente }) {
            {mostrarConcluidos ? <><EyeOff size={12}/> Ocultar Concluídos</> : <><Eye size={12}/> Mostrar Todos</>}
         </button>
         <p className="text-[10px] font-black text-amber-500 uppercase mb-1">Dinheiro na Rua (Pendentes)</p>
-        <p className="text-4xl font-black">R$ {tE.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+        <p className="text-4xl font-black">R$ {tE.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
         <div className="grid grid-cols-2 gap-4 mt-6 pt-6 border-t border-amber-500/20">
-          <div><p className="text-[9px] text-slate-500 uppercase font-black">Recebido c/ Juros</p><p className="text-lg font-black text-emerald-400">R$ {tR.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-          <div><p className="text-[9px] text-slate-500 uppercase font-black">Lucro Realizado</p><p className={`text-lg font-black ${luc >= 0 ? 'text-blue-400' : 'text-red-400'}`}>R$ {luc.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+          <div><p className="text-[9px] text-slate-500 uppercase font-black">Recebido c/ Juros</p><p className="text-lg font-black text-emerald-400">R$ {tR.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
+          <div><p className="text-[9px] text-slate-500 uppercase font-black">Lucro Realizado</p><p className={`text-lg font-black ${luc >= 0 ? 'text-blue-400' : 'text-red-400'}`}>R$ {luc.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
         </div>
       </div>
       {clientesVisiveis.map((cli, idx) => (
@@ -584,7 +594,7 @@ function DevedoresView({ items, onAbrirCliente }) {
             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border ${cli.a === 0 ? 'bg-slate-800 text-slate-500 border-slate-700' : 'bg-amber-500/10 text-amber-500 border-amber-900/20'}`}><Users size={20}/></div>
             <div><p className="text-sm font-black">{cli.n}</p><p className="text-[9px] text-slate-500 uppercase">{cli.a === 0 ? <span className="text-emerald-500">Acordos Concluídos</span> : `${cli.a} cobranças ativas`}</p></div>
           </div>
-          <p className={`text-sm font-black ${cli.a === 0 ? 'text-slate-500' : 'text-amber-400'}`}>R$ {cli.e.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+          <p className={`text-sm font-black ${cli.a === 0 ? 'text-slate-500' : 'text-amber-400'}`}>R$ {cli.e.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
         </div>
       ))}
     </div>
@@ -631,9 +641,9 @@ function ClienteDossieView({ nome, items, onVoltar, onStatusChange, onEdit, onDe
       <div className="bg-amber-600/10 border border-amber-500/20 p-6 rounded-[2.5rem]">
          <p className="text-3xl font-black mb-4">{nome}</p>
          <div className="grid grid-cols-3 gap-2 border-t border-amber-500/20 pt-4">
-            <div><p className="text-[8px] text-slate-500 uppercase font-black">Emprestado</p><p className="text-sm font-black text-amber-400">R$ {tE.toLocaleString('pt-BR')}</p></div>
-            <div><p className="text-[8px] text-slate-500 uppercase font-black">Recebido</p><p className="text-sm font-black text-emerald-400">R$ {tR.toLocaleString('pt-BR')}</p></div>
-            <div><p className="text-[8px] text-slate-500 uppercase font-black">Lucro</p><p className="text-sm font-black text-blue-400">R$ {luc.toLocaleString('pt-BR')}</p></div>
+            <div><p className="text-[8px] text-slate-500 uppercase font-black">Emprestado</p><p className="text-sm font-black text-amber-400">R$ {tE.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
+            <div><p className="text-[8px] text-slate-500 uppercase font-black">Recebido</p><p className="text-sm font-black text-emerald-400">R$ {tR.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
+            <div><p className="text-[8px] text-slate-500 uppercase font-black">Lucro</p><p className="text-sm font-black text-blue-400">R$ {luc.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
          </div>
       </div>
       
@@ -678,7 +688,7 @@ function ClienteDossieView({ nome, items, onVoltar, onStatusChange, onEdit, onDe
                </div>
                <div className="text-right">
                   <p className="text-[8px] font-black text-slate-500 uppercase">Total</p>
-                  <p className={`text-lg font-black ${isConcluido ? 'text-slate-500' : 'text-amber-400'}`}>R$ {total.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+                  <p className={`text-lg font-black ${isConcluido ? 'text-slate-500' : 'text-amber-400'}`}>R$ {total.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
                </div>
             </div>
             {!isConcluido && (
@@ -729,11 +739,11 @@ function RolagemModal({ item, totalAtual, onClose, onSave }) {
   );
 }
 
-// NOVA TELA DE CARTÕES (COM STATUS E CHECK DE PAGAMENTO)
-function CartoesView({ items, onEdit, onDelete, onStatusChange }) {
-  const categorias = {}; let total = 0;
+// NOVA TELA DE CARTÕES AGRUPADA POR BANCO
+function CartoesView({ items, infoBancos, mesAtual, anoAtual, onEdit, onDelete, onStatusChange }) {
+  let totalGeral = 0;
   
-  // Ordena para que os Pendentes fiquem em cima e os Pagos em baixo
+  // Ordena os itens (Pagos vão para baixo, Data organiza os pendentes)
   const ordenados = [...items].sort((a, b) => {
     const aPago = safeString(a.dados[11]).toUpperCase() === 'PAGO';
     const bPago = safeString(b.dados[11]).toUpperCase() === 'PAGO';
@@ -744,66 +754,121 @@ function CartoesView({ items, onEdit, onDelete, onStatusChange }) {
     return dataA - dataB;
   });
 
+  const cartoesPorBanco = {};
+  const categorias = {};
+
   ordenados.forEach(i => {
-     const val = parseCurrency(i.dados[7]); const cat = safeString(i.dados[9]) || 'Outros';
-     categorias[cat] = (categorias[cat] || 0) + val; total += val;
+     const banco = safeString(i.dados[10]) || 'Outros Bancos';
+     const cat = safeString(i.dados[9]) || 'Outros';
+     const val = parseCurrency(i.dados[7]);
+     
+     totalGeral += val;
+     categorias[cat] = (categorias[cat] || 0) + val;
+
+     if (!cartoesPorBanco[banco]) cartoesPorBanco[banco] = { total: 0, items: [] };
+     cartoesPorBanco[banco].total += val;
+     cartoesPorBanco[banco].items.push(i);
   });
+
+  // Calcula o Vencimento exato da Fatura do Banco para o Mês Selecionado
+  const getVencimentoStr = (bancoNome) => {
+      const info = infoBancos[bancoNome];
+      if (!info) return '--/--/----';
+      let mVenc = mesAtual;
+      let aVenc = anoAtual;
+      if (info.vencimento < info.fechamento) {
+          mVenc++;
+          if (mVenc > 11) { mVenc = 0; aVenc++; }
+      }
+      return `${String(info.vencimento).padStart(2, '0')}/${String(mVenc + 1).padStart(2, '0')}/${aVenc}`;
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
+      
+      {/* Resumo Total das Faturas e Categorias */}
       <div className="bg-indigo-900/20 border border-indigo-500/20 p-8 rounded-[2.5rem] shadow-xl">
-        <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1">Fatura do Mês</p>
-        <p className="text-4xl font-black text-white tracking-tighter">R$ {total.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+        <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1">Gasto Total com Cartões</p>
+        <p className="text-4xl font-black text-white tracking-tighter">R$ {totalGeral.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
         <div className="mt-6 border-t border-indigo-500/20 pt-4 grid grid-cols-2 gap-y-3">
            {Object.entries(categorias).map(([c, v], idx) => (
-              <div key={idx}><p className="text-[9px] font-black text-slate-500 uppercase">{c}</p><p className="text-sm font-black text-indigo-400">R$ {v.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+              <div key={idx}><p className="text-[9px] font-black text-slate-500 uppercase">{c}</p><p className="text-sm font-black text-indigo-400">R$ {v.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p></div>
            ))}
         </div>
       </div>
-      <h3 className="text-xs font-black text-slate-500 uppercase ml-1">Lançamentos Individuais</h3>
-      {ordenados.length === 0 ? <p className="text-xs text-slate-600 italic">Sem registos.</p> : ordenados.map((i, idx) => {
-        const isPago = safeString(i.dados[11]).toUpperCase() === 'PAGO';
-        const dataTx = parseDataBR(i.dados[5]);
-        
-        let badgeText = "Pendente";
-        let badgeColor = "bg-slate-800 text-slate-500";
-
-        if (isPago) {
-           badgeText = "Pago";
-           badgeColor = "bg-emerald-900/30 text-emerald-500";
-        } else if (dataTx) {
-           const hoje = new Date(); hoje.setHours(0,0,0,0);
-           const d = new Date(dataTx); d.setHours(0,0,0,0);
-           const diffDias = Math.round((d.getTime() - hoje.getTime()) / (1000 * 3600 * 24));
+      
+      <h3 className="text-xs font-black text-slate-500 uppercase ml-1 mt-6 mb-2">Faturas por Banco</h3>
+      
+      {Object.keys(cartoesPorBanco).length === 0 ? (
+         <p className="text-xs text-slate-600 italic">Sem registos neste mês.</p> 
+      ) : (
+         Object.keys(cartoesPorBanco).map(banco => {
+           const vencimentoStr = getVencimentoStr(banco);
            
-           if (diffDias > 0) { badgeText = "Agendado"; badgeColor = "bg-blue-900/30 text-blue-400"; }
-           else if (diffDias < 0) { badgeText = "Atrasado"; badgeColor = "bg-red-900/30 text-red-500 animate-pulse font-black"; }
-           else { badgeText = "Vence Hoje"; badgeColor = "bg-amber-900/30 text-amber-500 font-black"; }
-        }
+           return (
+              <div key={banco} className="bg-slate-900 border border-slate-800 rounded-[2rem] overflow-hidden mb-6">
+                 {/* Cabeçalho do Banco */}
+                 <div className="bg-slate-800/40 p-5 border-b border-slate-800 flex justify-between items-center">
+                    <div>
+                       <h4 className="font-black text-indigo-400 uppercase text-lg">{banco}</h4>
+                       <p className="text-[9px] font-bold text-slate-500 uppercase mt-1">Vencimento: {vencimentoStr}</p>
+                    </div>
+                    <div className="text-right">
+                       <p className="text-[8px] text-slate-500 font-bold uppercase">Total da Fatura</p>
+                       <p className="font-black text-white text-lg">R$ {cartoesPorBanco[banco].total.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
+                    </div>
+                 </div>
 
-        return (
-          <div key={idx} className={`p-4 border rounded-3xl flex justify-between items-center transition-all ${isPago ? 'bg-slate-900/50 border-slate-800/50 opacity-70' : 'bg-slate-900 border-slate-800'}`}>
-            <div className="flex gap-4 items-center">
-               <div className={`w-10 h-10 rounded-2xl border flex items-center justify-center ${isPago ? 'border-emerald-500/20 text-emerald-500' : 'border-indigo-500/20 text-indigo-400'}`}><CreditCard size={18}/></div>
-               <div>
-                  <p className="text-sm font-black">{i.dados[8]}</p>
-                  <p className="text-[9px] text-slate-500 uppercase">{i.dados[10]} • {i.dados[9]} • {formatDateToBR(dataTx)}</p>
-                  <span className={`text-[8px] px-2 py-0.5 rounded-md mt-1 inline-block uppercase font-black ${badgeColor}`}>{badgeText}</span>
-               </div>
-            </div>
-            <div className="flex flex-col items-end gap-2">
-              <p className={`text-sm font-black ${isPago ? 'text-slate-500' : 'text-white'}`}>R$ {parseCurrency(i.dados[7]).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
-              <div className="flex gap-2">
-                <button onClick={() => onEdit(i)} className="p-2 bg-slate-800 rounded-lg text-blue-400 active:scale-90"><Edit size={16}/></button>
-                <button onClick={() => onDelete(i.linha)} className="p-2 bg-slate-800 rounded-lg text-red-400 active:scale-90"><Trash2 size={16}/></button>
-                <button onClick={() => onStatusChange(i, isPago ? 'Pendente' : 'Pago')} className={`p-2 rounded-lg active:scale-90 transition-all ${isPago ? 'bg-emerald-900/20 text-emerald-500' : 'bg-slate-800 text-slate-400'}`}>
-                  {isPago ? <CheckCircle size={16}/> : <RotateCcw size={16}/>}
-                </button>
+                 {/* Lista de Transações daquele Banco */}
+                 <div className="p-3 space-y-2">
+                    {cartoesPorBanco[banco].items.map((i, idx) => {
+                       const isPago = safeString(i.dados[11]).toUpperCase() === 'PAGO';
+                       const dataTx = parseDataBR(i.dados[5]);
+                       
+                       let badgeText = "Pendente";
+                       let badgeColor = "bg-slate-800 text-slate-500";
+
+                       if (isPago) {
+                          badgeText = "Pago";
+                          badgeColor = "bg-emerald-900/30 text-emerald-500";
+                       } else if (dataTx) {
+                          const hoje = new Date(); hoje.setHours(0,0,0,0);
+                          const d = new Date(dataTx); d.setHours(0,0,0,0);
+                          const diffDias = Math.round((d.getTime() - hoje.getTime()) / (1000 * 3600 * 24));
+                          
+                          if (diffDias > 0) { badgeText = "Agendado"; badgeColor = "bg-blue-900/30 text-blue-400"; }
+                          else if (diffDias < 0) { badgeText = "Atrasado"; badgeColor = "bg-red-900/30 text-red-500 animate-pulse font-black"; }
+                          else { badgeText = "Vence Hoje"; badgeColor = "bg-amber-900/30 text-amber-500 font-black"; }
+                       }
+
+                       return (
+                         <div key={idx} className={`p-4 border rounded-3xl flex justify-between items-center transition-all ${isPago ? 'bg-slate-900/30 border-slate-800/30 opacity-60' : 'bg-slate-900 border-slate-800'}`}>
+                           <div className="flex gap-4 items-center">
+                              <div className={`w-10 h-10 rounded-2xl border flex items-center justify-center ${isPago ? 'border-emerald-500/20 text-emerald-500' : 'border-indigo-500/20 text-indigo-400'}`}><CreditCard size={18}/></div>
+                              <div>
+                                 <p className="text-sm font-black">{i.dados[8]}</p>
+                                 <p className="text-[9px] text-slate-500 uppercase">{i.dados[9]} • {formatDateToBR(dataTx)}</p>
+                                 <span className={`text-[8px] px-2 py-0.5 rounded-md mt-1 inline-block uppercase font-black ${badgeColor}`}>{badgeText}</span>
+                              </div>
+                           </div>
+                           <div className="flex flex-col items-end gap-2">
+                             <p className={`text-sm font-black ${isPago ? 'text-slate-500' : 'text-white'}`}>R$ {parseCurrency(i.dados[7]).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
+                             <div className="flex gap-2">
+                               <button onClick={() => onEdit(i)} className="p-2 bg-slate-800 rounded-lg text-blue-400 active:scale-90"><Edit size={16}/></button>
+                               <button onClick={() => onDelete(i.linha)} className="p-2 bg-slate-800 rounded-lg text-red-400 active:scale-90"><Trash2 size={16}/></button>
+                               <button onClick={() => onStatusChange(i, isPago ? 'Pendente' : 'Pago')} className={`p-2 rounded-lg active:scale-90 transition-all ${isPago ? 'bg-emerald-900/20 text-emerald-500' : 'bg-slate-800 text-slate-400'}`}>
+                                 {isPago ? <CheckCircle size={16}/> : <RotateCcw size={16}/>}
+                               </button>
+                             </div>
+                           </div>
+                         </div>
+                       )
+                    })}
+                 </div>
               </div>
-            </div>
-          </div>
-        )
-      })}
+           )
+         })
+      )}
     </div>
   );
 }
@@ -921,4 +986,4 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
 
 function ChoiceBtn({ onClick, icon, label }) { return ( <button onClick={onClick} className="bg-slate-800/40 border border-slate-700/40 py-6 rounded-3xl flex flex-col items-center gap-3 active:scale-90 transition-all">{icon} <span className="font-black text-[10px] uppercase text-slate-400 tracking-widest">{label}</span></button> ); }
 function NavButton({ icon, label, active, onClick }) { return ( <button onClick={onClick} className={`flex flex-col items-center gap-1 p-2 w-16 transition-all ${active ? 'text-emerald-500 scale-110' : 'text-slate-600 opacity-60'}`}> {icon} <span className="text-[9px] font-black uppercase tracking-tighter">{label}</span> </button> ); }
-function InfoCard({ title, val, color, onClick }) { return ( <div onClick={onClick} className="bg-slate-900 border border-slate-800 p-5 rounded-[2rem] cursor-pointer active:scale-95 transition-all"><div className={`mb-3 ${color}`}><TrendingUp size={16}/></div><p className="text-[10px] font-black text-slate-500 uppercase mb-1">{title}</p><p className="text-lg font-black tracking-tight">R$ {val.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p></div> ); }
+function InfoCard({ title, val, color, onClick }) { return ( <div onClick={onClick} className="bg-slate-900 border border-slate-800 p-5 rounded-[2rem] cursor-pointer active:scale-95 transition-all"><div className={`mb-3 ${color}`}><TrendingUp size={16}/></div><p className="text-[10px] font-black text-slate-500 uppercase mb-1">{title}</p><p className="text-lg font-black tracking-tight">R$ {val.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div> ); }
