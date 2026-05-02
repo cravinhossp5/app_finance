@@ -48,7 +48,7 @@ function formatDateToBR(dateObj) {
 function getMesFatura(dataTx, bancoStr, dictFechamentos) {
   if (!dataTx) return null;
   const banco = safeString(bancoStr);
-  const diaFechamento = dictFechamentos[banco] || 31; // Se não encontrar, assume dia 31
+  const diaFechamento = dictFechamentos[banco] || 31; 
   
   let m = dataTx.getMonth();
   let a = dataTx.getFullYear();
@@ -235,6 +235,8 @@ export default function Dashboard() {
     });
     
     cartoesDoMes.forEach(g => {
+       // Só desconta do caixa se não estiver pago ainda (opcional) ou considere tudo como compromisso.
+       // Vamos manter considerando tudo como saída prevista do mês para segurança:
        saida += parseCurrency(g.dados[7]);
     });
     
@@ -318,7 +320,9 @@ export default function Dashboard() {
         {activeTab === 'patrimonio' && carteiraDetalhe && <CarteiraDetalheView tipo={carteiraDetalhe} ativosVar={ativosVariaveis} hist={historicoOrdens} ativosFixos={ativosFixos} liveCrypto={cryptoLivePrices} onVoltar={() => setCarteiraDetalhe(null)} onEdit={i => abrirEdicao(i, 'ativo')} onDelete={(l, a) => setCustomDialog({ type: 'delete', aba: a, linha: l, message: 'A operação será apagada do histórico.' })} />}
         {activeTab === 'devedores' && !clienteAtivo && <DevedoresView items={devedores} onAbrirCliente={setClienteAtivo} />}
         {activeTab === 'devedores' && clienteAtivo && <ClienteDossieView nome={clienteAtivo} items={devedores} onVoltar={() => setClienteAtivo(null)} onStatusChange={(i, s) => handleGravarDados([i.dados[5], i.dados[6], i.dados[7], i.dados[8], s, i.dados[10], i.dados[11]], 'bdDevedores', i.linha)} onEdit={i => abrirEdicao(i, 'devedor')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdDevedores', linha: l, message: 'A dívida será apagada permanentemente.' })} onRolar={(item, totalAtual) => setCustomDialog({ type: 'rolar', item, totalAtual })} />}
-        {activeTab === 'cartoes' && <CartoesView items={cartoesDoMes} onEdit={i => abrirEdicao(i, 'cartao')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdLancamentos', linha: l, message: 'A despesa sumirá da fatura.' })} />}
+        
+        {/* Passando o onStatusChange para a CartoesView */}
+        {activeTab === 'cartoes' && <CartoesView items={cartoesDoMes} onEdit={i => abrirEdicao(i, 'cartao')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdLancamentos', linha: l, message: 'A despesa sumirá da fatura.' })} onStatusChange={(i, s) => handleGravarDados([i.dados[5], i.dados[6], i.dados[7], i.dados[8], i.dados[9], i.dados[10], s], 'bdLancamentos', i.linha)} />}
       </div>
 
       <nav className="fixed bottom-0 w-full bg-slate-950/95 backdrop-blur-2xl border-t border-slate-800/50 flex justify-around items-center p-3 z-50 pb-safe">
@@ -725,9 +729,22 @@ function RolagemModal({ item, totalAtual, onClose, onSave }) {
   );
 }
 
-function CartoesView({ items, onEdit, onDelete }) {
+// NOVA TELA DE CARTÕES (COM STATUS E CHECK DE PAGAMENTO)
+function CartoesView({ items, onEdit, onDelete, onStatusChange }) {
   const categorias = {}; let total = 0;
-  items.forEach(i => {
+  
+  // Ordena para que os Pendentes fiquem em cima e os Pagos em baixo
+  const ordenados = [...items].sort((a, b) => {
+    const aPago = safeString(a.dados[11]).toUpperCase() === 'PAGO';
+    const bPago = safeString(b.dados[11]).toUpperCase() === 'PAGO';
+    if (aPago && !bPago) return 1;
+    if (!aPago && bPago) return -1;
+    const dataA = parseDataBR(a.dados[5])?.getTime() || 0;
+    const dataB = parseDataBR(b.dados[5])?.getTime() || 0;
+    return dataA - dataB;
+  });
+
+  ordenados.forEach(i => {
      const val = parseCurrency(i.dados[7]); const cat = safeString(i.dados[9]) || 'Outros';
      categorias[cat] = (categorias[cat] || 0) + val; total += val;
   });
@@ -735,7 +752,7 @@ function CartoesView({ items, onEdit, onDelete }) {
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       <div className="bg-indigo-900/20 border border-indigo-500/20 p-8 rounded-[2.5rem] shadow-xl">
-        <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1">Gasto Total com Cartões</p>
+        <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1">Fatura do Mês</p>
         <p className="text-4xl font-black text-white tracking-tighter">R$ {total.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
         <div className="mt-6 border-t border-indigo-500/20 pt-4 grid grid-cols-2 gap-y-3">
            {Object.entries(categorias).map(([c, v], idx) => (
@@ -744,18 +761,49 @@ function CartoesView({ items, onEdit, onDelete }) {
         </div>
       </div>
       <h3 className="text-xs font-black text-slate-500 uppercase ml-1">Lançamentos Individuais</h3>
-      {items.length === 0 ? <p className="text-xs text-slate-600 italic">Sem registos.</p> : items.map((i, idx) => (
-        <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center">
-          <div className="flex gap-4 items-center"><div className="w-10 h-10 rounded-2xl border border-indigo-500/20 flex items-center justify-center text-indigo-400"><CreditCard size={18}/></div><div><p className="text-sm font-black">{i.dados[8]}</p><p className="text-[9px] text-slate-500 uppercase">{i.dados[10]} • {i.dados[9]}</p></div></div>
-          <div className="flex items-center gap-4">
-            <p className="text-sm font-black">R$ {parseCurrency(i.dados[7]).toLocaleString('pt-BR')}</p>
-            <div className="flex gap-2 ml-2">
-              <button onClick={() => onEdit(i)} className="p-3 bg-slate-800 rounded-xl text-blue-400 active:scale-90"><Edit size={20}/></button>
-              <button onClick={() => onDelete(i.linha)} className="p-3 bg-slate-800 rounded-xl text-red-400 active:scale-90"><Trash2 size={20}/></button>
+      {ordenados.length === 0 ? <p className="text-xs text-slate-600 italic">Sem registos.</p> : ordenados.map((i, idx) => {
+        const isPago = safeString(i.dados[11]).toUpperCase() === 'PAGO';
+        const dataTx = parseDataBR(i.dados[5]);
+        
+        let badgeText = "Pendente";
+        let badgeColor = "bg-slate-800 text-slate-500";
+
+        if (isPago) {
+           badgeText = "Pago";
+           badgeColor = "bg-emerald-900/30 text-emerald-500";
+        } else if (dataTx) {
+           const hoje = new Date(); hoje.setHours(0,0,0,0);
+           const d = new Date(dataTx); d.setHours(0,0,0,0);
+           const diffDias = Math.round((d.getTime() - hoje.getTime()) / (1000 * 3600 * 24));
+           
+           if (diffDias > 0) { badgeText = "Agendado"; badgeColor = "bg-blue-900/30 text-blue-400"; }
+           else if (diffDias < 0) { badgeText = "Atrasado"; badgeColor = "bg-red-900/30 text-red-500 animate-pulse font-black"; }
+           else { badgeText = "Vence Hoje"; badgeColor = "bg-amber-900/30 text-amber-500 font-black"; }
+        }
+
+        return (
+          <div key={idx} className={`p-4 border rounded-3xl flex justify-between items-center transition-all ${isPago ? 'bg-slate-900/50 border-slate-800/50 opacity-70' : 'bg-slate-900 border-slate-800'}`}>
+            <div className="flex gap-4 items-center">
+               <div className={`w-10 h-10 rounded-2xl border flex items-center justify-center ${isPago ? 'border-emerald-500/20 text-emerald-500' : 'border-indigo-500/20 text-indigo-400'}`}><CreditCard size={18}/></div>
+               <div>
+                  <p className="text-sm font-black">{i.dados[8]}</p>
+                  <p className="text-[9px] text-slate-500 uppercase">{i.dados[10]} • {i.dados[9]} • {formatDateToBR(dataTx)}</p>
+                  <span className={`text-[8px] px-2 py-0.5 rounded-md mt-1 inline-block uppercase font-black ${badgeColor}`}>{badgeText}</span>
+               </div>
+            </div>
+            <div className="flex flex-col items-end gap-2">
+              <p className={`text-sm font-black ${isPago ? 'text-slate-500' : 'text-white'}`}>R$ {parseCurrency(i.dados[7]).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+              <div className="flex gap-2">
+                <button onClick={() => onEdit(i)} className="p-2 bg-slate-800 rounded-lg text-blue-400 active:scale-90"><Edit size={16}/></button>
+                <button onClick={() => onDelete(i.linha)} className="p-2 bg-slate-800 rounded-lg text-red-400 active:scale-90"><Trash2 size={16}/></button>
+                <button onClick={() => onStatusChange(i, isPago ? 'Pendente' : 'Pago')} className={`p-2 rounded-lg active:scale-90 transition-all ${isPago ? 'bg-emerald-900/20 text-emerald-500' : 'bg-slate-800 text-slate-400'}`}>
+                  {isPago ? <CheckCircle size={16}/> : <RotateCcw size={16}/>}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   );
 }
@@ -781,7 +829,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
   return (
     <div className="fixed inset-0 bg-black/95 backdrop-blur-md z-[100] flex items-end md:items-center justify-center p-4">
       <div className="bg-slate-900 w-full max-w-md rounded-[3rem] border border-slate-800 p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
-        <div className="flex justify-between items-center mb-8"><h3 className="font-black text-xl text-emerald-500">{editItem ? `Editar ${tipo}` : 'Novo'}</h3><button onClick={onClose} className="p-3 bg-slate-800 rounded-full text-slate-500"><X size={24}/></button></div>
+        <div className="flex justify-between items-center mb-8"><h3 className="font-black text-xl text-emerald-500">{editItem ? `Editar ${tipo}` : 'Novo Lançamento'}</h3><button onClick={onClose} className="p-3 bg-slate-800 rounded-full text-slate-500"><X size={24}/></button></div>
         {tipo === 'escolha' ? (
           <div className="grid grid-cols-2 gap-3"><ChoiceBtn onClick={() => setTipo('salario')} icon={<Banknote size={32} className="text-blue-400"/>} label="Salário" /><ChoiceBtn onClick={() => setTipo('cartao')} icon={<CreditCard size={32} className="text-indigo-400"/>} label="Gastos" /><ChoiceBtn onClick={() => setTipo('ativo')} icon={<Wallet size={32} className="text-emerald-400"/>} label="Ativos" /><ChoiceBtn onClick={() => setTipo('devedor')} icon={<Users size={32} className="text-amber-400"/>} label="Devedor" /><ChoiceBtn onClick={() => setTipo('provento')} icon={<Coins size={32} className="text-yellow-400"/>} label="Receber Provento" /></div>
         ) : (
