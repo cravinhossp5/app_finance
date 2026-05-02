@@ -15,7 +15,7 @@ const safeString = (val) => String(val || '').trim();
 
 function parseDataBR(dataStr) {
   const str = safeString(dataStr);
-  if (!str) return null; // Evita puxar "hoje" em campos vazios
+  if (!str) return null; 
   if (str.includes('/')) {
     const parts = str.split('/');
     if (parts.length >= 3) return new Date(parts[2], parts[1] - 1, parts[0]);
@@ -36,7 +36,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('dashboard'); 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalType, setModalType] = useState(''); 
-  const [editItem, setEditItem] = useState(null); // Estado para o Modo de Edição
+  const [editItem, setEditItem] = useState(null); 
   const [isLoading, setIsLoading] = useState(true);
   const [syncStatus, setSyncStatus] = useState('synced'); 
   const [notification, setNotification] = useState(null);
@@ -55,7 +55,6 @@ export default function Dashboard() {
   const [meusBancos, setMeusBancos] = useState([]);
   const [bancosConfig, setBancosConfig] = useState({});
   
-  // Modos de Detalhamento ("Mergulho")
   const [clienteAtivo, setClienteAtivo] = useState(null);
   const [carteiraDetalhe, setCarteiraDetalhe] = useState(null);
 
@@ -114,7 +113,7 @@ export default function Dashboard() {
 
   useEffect(() => { fetchDados(); }, []);
 
-  // MOTOR CENTRAL DE CRUD (Criar, Atualizar, Excluir)
+  // MOTOR CENTRAL DE CRUD 
   const handleGravarDados = async (payload, aba, linha = null) => {
     setIsModalOpen(false); 
     setEditItem(null);
@@ -161,7 +160,6 @@ export default function Dashboard() {
     }
   };
 
-  // Abre o modal no modo edição
   const abrirEdicao = (item, tipoStr) => {
     setEditItem(item);
     setModalType(tipoStr);
@@ -173,12 +171,14 @@ export default function Dashboard() {
     handleGravarDados(payload, 'bdLancamentos', item.linha);
   };
 
+  // --- MATEMÁTICA TEMPORAL (CAIXA LIVRE ESTRITO) ---
   const calcCaixaLivre = () => {
     let rendaMes = 0; let gastoMes = 0; let investimentoMes = 0; let emprestadoMes = 0; let recebidoMes = 0;
 
     salarios.forEach(s => {
       const d = parseDataBR(s.dados[5]);
-      if (d && d.getMonth() === mesAtual && d.getFullYear() === anoAtual) rendaMes += (parseFloat(s.dados[9]) || 0);
+      // Na aba bdRendas agora: Líquido está na coluna K (dados[10])
+      if (d && d.getMonth() === mesAtual && d.getFullYear() === anoAtual) rendaMes += (parseFloat(s.dados[10]) || 0);
     });
 
     gastosCartao.forEach(g => {
@@ -187,13 +187,13 @@ export default function Dashboard() {
     });
 
     historicoOrdens.forEach(ordem => {
-      const d = parseDataBR(ordem.dados[5]); // Coluna F de historico_ordens
-      const tipoOp = safeString(ordem.dados[7]).toUpperCase(); // Coluna H
-      const valor = parseFloat(ordem.dados[9]) || 0; // Coluna J (Preço)
-      const qtd = parseFloat(ordem.dados[8]) || 0; // Coluna I (Qtd)
+      const d = parseDataBR(ordem.dados[5]); 
+      const tipoOp = safeString(ordem.dados[7]).toUpperCase(); 
+      const valor = parseFloat(ordem.dados[9]) || 0; 
+      const qtd = parseFloat(ordem.dados[8]) || 0; 
       if (d && d.getMonth() === mesAtual && d.getFullYear() === anoAtual) {
-        if (tipoOp.includes('COMPRA')) investimentoMes += (valor * qtd);
-        if (tipoOp.includes('VENDA')) rendaMes += (valor * qtd); 
+        if (tipoOp.includes('COMPRA')) investimentoMes += (valor * qtd); // Dinheiro SAI da conta corrente
+        if (tipoOp.includes('VENDA')) rendaMes += (valor * qtd); // Dinheiro VOLTA pra conta corrente
       }
     });
 
@@ -295,10 +295,14 @@ function ResumoView({ dadosCaixa, salarios, mesAtual, anoAtual, onEdit, onDelete
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <p className="font-black text-sm text-blue-400">+ R$ {parseFloat(item.dados[9]||0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-            <div className="flex gap-2">
-              <button onClick={() => onEdit(item)} className="text-slate-500 hover:text-blue-400 transition-colors"><Edit size={16}/></button>
-              <button onClick={() => onDelete(item.linha)} className="text-slate-500 hover:text-red-400 transition-colors"><Trash2 size={16}/></button>
+            <div className="text-right">
+              {/* Líquido está na coluna K (10) */}
+              <p className="font-black text-sm text-blue-400">+ R$ {parseFloat(item.dados[10]||0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+              <p className="text-[8px] text-slate-500 uppercase">Bruto: R$ {parseFloat(item.dados[6]||0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+            </div>
+            <div className="flex flex-col gap-2 border-l border-slate-800 pl-3">
+              <button onClick={() => onEdit(item)} className="text-slate-500 hover:text-blue-400 transition-colors"><Edit size={14}/></button>
+              <button onClick={() => onDelete(item.linha)} className="text-slate-500 hover:text-red-400 transition-colors"><Trash2 size={14}/></button>
             </div>
           </div>
         </div>
@@ -378,39 +382,77 @@ function InfoCard({ icon, title, value, color, onClick }) {
 }
 
 // ==========================================
-// VIEW: COBRANÇAS
+// VIEW: COBRANÇAS (MACRO VIEW TOP)
 // ==========================================
 function DevedoresView({ items, onAbrirCliente }) {
+  // Calcula totais globais e agrupa por cliente
   const clientesObj = {};
+  let totalEmprestadoGlobal = 0;
+  let totalRecebidoGlobal = 0;
+  let lucroRealizado = 0;
+
   items.forEach(item => {
     const nome = safeString(item.dados[6]) || 'Sem Nome';
     if (!clientesObj[nome]) clientesObj[nome] = { nome, totalEmprestado: 0, totalPago: 0, dividasAtivas: 0 };
-    clientesObj[nome].totalEmprestado += (parseFloat(item.dados[7]) || 0);
-    clientesObj[nome].totalPago += (parseFloat(item.dados[3]) || 0);
-    if (safeString(item.dados[9]) !== 'Concluído') clientesObj[nome].dividasAtivas += 1;
+    
+    const emprestado = parseFloat(item.dados[7]) || 0;
+    const pago = parseFloat(item.dados[3]) || 0;
+    const status = safeString(item.dados[9]);
+
+    clientesObj[nome].totalEmprestado += emprestado;
+    clientesObj[nome].totalPago += pago;
+    if (status !== 'Concluído') clientesObj[nome].dividasAtivas += 1;
+
+    totalEmprestadoGlobal += emprestado;
+    totalRecebidoGlobal += pago;
+    if (status === 'Concluído') lucroRealizado += (pago - emprestado);
   });
 
   return (
     <div className="space-y-4 animate-in fade-in duration-500">
-      <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1 mb-4">Resumo por Cliente</h3>
-      {Object.values(clientesObj).sort((a,b) => b.dividasAtivas - a.dividasAtivas).map((cli, idx) => (
-        <div key={idx} onClick={() => onAbrirCliente(cli.nome)} className="p-4 bg-slate-900 border border-slate-800 hover:border-amber-500/50 rounded-3xl flex justify-between items-center cursor-pointer transition-all active:scale-95">
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center"><Users size={18}/></div>
-            <div>
-              <p className="font-black text-sm text-slate-100">{cli.nome}</p>
-              <p className="text-[9px] font-black text-slate-500 uppercase">{cli.dividasAtivas} operações ativas</p>
-            </div>
+      <div className="bg-amber-600/10 border border-amber-500/20 p-8 rounded-[2.5rem] shadow-xl">
+        <p className="text-[10px] font-black text-amber-500 uppercase tracking-widest mb-1">Total Emprestado (Geral)</p>
+        <p className="text-4xl font-black text-white tracking-tighter">R$ {totalEmprestadoGlobal.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+        
+        <div className="grid grid-cols-2 gap-4 mt-6 pt-6 border-t border-amber-500/20">
+          <div>
+            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Total Recebido</p>
+            <p className="text-lg font-black text-emerald-400">R$ {totalRecebidoGlobal.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
           </div>
-          <div className="text-right">
-            <p className={`font-black text-sm ${cli.totalEmprestado - cli.totalPago > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>R$ {Math.max(0, cli.totalEmprestado - cli.totalPago).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+          <div>
+            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Lucro (Concluídos)</p>
+            <p className={`text-lg font-black ${lucroRealizado >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
+              R$ {lucroRealizado.toLocaleString('pt-BR', {minimumFractionDigits: 2})}
+            </p>
           </div>
         </div>
-      ))}
+      </div>
+
+      <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1 mb-4 mt-6">Resumo por Cliente</h3>
+      {Object.values(clientesObj).sort((a,b) => b.dividasAtivas - a.dividasAtivas).map((cli, idx) => {
+        const pendente = cli.totalEmprestado - cli.totalPago;
+        return (
+          <div key={idx} onClick={() => onAbrirCliente(cli.nome)} className="p-4 bg-slate-900 border border-slate-800 hover:border-amber-500/50 rounded-3xl flex justify-between items-center cursor-pointer transition-all active:scale-95">
+            <div className="flex items-center gap-4">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center"><Users size={18}/></div>
+              <div>
+                <p className="font-black text-sm text-slate-100">{cli.nome}</p>
+                <p className="text-[9px] font-black text-slate-500 uppercase">{cli.dividasAtivas} operações ativas</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className={`font-black text-sm ${pendente > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>R$ {Math.max(0, pendente).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
+            </div>
+          </div>
+        )
+      })}
     </div>
   );
 }
 
+// ==========================================
+// VIEW: DOSSIÊ DO CLIENTE
+// ==========================================
 function ClienteDossieView({ nome, items, onVoltar, onStatusChange, onEdit, onDelete }) {
   const dividas = items.filter(i => safeString(i.dados[6]) === nome);
   
@@ -427,28 +469,46 @@ function ClienteDossieView({ nome, items, onVoltar, onStatusChange, onEdit, onDe
         const vOriginal = parseFloat(item.dados[7]) || 0;
         const juros = parseFloat(item.dados[10]) || 0;
         const dataAcordo = parseDataBR(item.dados[5]);
+        const dataVenc = parseDataBR(item.dados[8]); 
         const isConcluido = safeString(item.dados[9]) === 'Concluído';
+        
         const hoje = new Date();
         let meses = dataAcordo ? (hoje.getFullYear() - dataAcordo.getFullYear()) * 12 + (hoje.getMonth() - dataAcordo.getMonth()) : 1;
         if (dataAcordo && hoje.getDate() < dataAcordo.getDate()) meses--;
-        const jurosTotais = vOriginal * (juros/100) * Math.max(1, meses);
+        meses = Math.max(1, meses);
+        const jurosTotais = vOriginal * (juros/100) * meses;
+
+        const isVencido = !isConcluido && (hoje > dataVenc);
 
         return (
-          <div key={idx} className={`p-5 rounded-[2rem] border ${isConcluido ? 'bg-slate-900/40 border-slate-800' : 'bg-slate-900 border-amber-900/30'}`}>
+          <div key={idx} className={`p-5 rounded-[2rem] border ${isConcluido ? 'bg-slate-900/40 border-slate-800' : isVencido ? 'bg-red-950/20 border-red-900/50' : 'bg-slate-900 border-amber-900/30'}`}>
             <div className="flex justify-between items-start mb-4">
               <div>
-                <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-lg ${isConcluido ? 'bg-slate-800 text-slate-400' : 'bg-amber-900/50 text-amber-400'}`}>{isConcluido ? 'Paga' : 'Aberta'}</span>
-                <p className="text-[10px] font-bold text-slate-500 mt-2">Vence em: {formatDateToBR(parseDataBR(item.dados[8]))}</p>
+                <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-lg ${isConcluido ? 'bg-slate-800 text-slate-400' : isVencido ? 'bg-red-900/50 text-red-400' : 'bg-amber-900/50 text-amber-400'}`}>
+                  {isConcluido ? 'Paga' : isVencido ? 'Vencida' : 'Aberta'}
+                </span>
+                <p className="text-[10px] font-bold text-slate-500 mt-2">Vence em: {formatDateToBR(dataVenc)}</p>
               </div>
               <div className="flex gap-2">
-                <button onClick={() => onEdit(item)} className="p-2 bg-slate-800 rounded-xl text-slate-400 hover:text-emerald-400"><Edit size={16}/></button>
+                <button onClick={() => onEdit(item)} className="p-2 bg-slate-800 rounded-xl text-slate-400 hover:text-blue-400"><Edit size={16}/></button>
                 <button onClick={() => onDelete(item.linha)} className="p-2 bg-slate-800 rounded-xl text-slate-400 hover:text-red-400"><Trash2 size={16}/></button>
                 <button onClick={() => onStatusChange(item, isConcluido ? 'Pendente' : 'Concluído')} className="p-2 bg-slate-800 rounded-xl text-slate-400 hover:text-emerald-400"><CheckCircle size={16}/></button>
               </div>
             </div>
-            <div className="flex justify-between items-center border-t border-slate-800 pt-3">
-              <span className="text-xs text-slate-400 font-bold">Principal + Juros</span>
-              <span className="text-lg font-black text-slate-200">R$ {(vOriginal + jurosTotais).toLocaleString('pt-BR', {minimumFractionDigits:2})}</span>
+            
+            <div className="flex flex-col gap-1 border-t border-slate-800 pt-3 mt-3">
+              <div className="flex justify-between text-xs text-slate-400">
+                <span>Principal Emprestado:</span>
+                <span>R$ {vOriginal.toLocaleString('pt-BR', {minimumFractionDigits:2})}</span>
+              </div>
+              <div className="flex justify-between text-xs text-slate-400">
+                <span>Taxa de Juros Aplicada:</span>
+                <span>{juros}% ao mês</span>
+              </div>
+              <div className="flex justify-between items-center mt-1">
+                <span className="text-xs text-amber-400 font-bold uppercase tracking-widest">Saldo Devedor Atual:</span>
+                <span className="text-lg font-black text-amber-400">R$ {(vOriginal + jurosTotais).toLocaleString('pt-BR', {minimumFractionDigits:2})}</span>
+              </div>
             </div>
           </div>
         );
@@ -523,10 +583,9 @@ function CartoesView({ items, config, onPagar, onEdit, onDelete }) {
 function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem }) {
   const [formData, setFormData] = useState({ 
     data: new Date().toISOString().split('T')[0], dataVenc: new Date().toISOString().split('T')[0], banco: meusBancos[0] || 'Dinheiro', 
-    ativoTipo: 'Ação', nome: '', valor: '', juros: '', he50: '', he100: '', descontos: '', isFixo: false, categoria: ''
+    ativoTipo: 'Ação', nome: '', valor: '', juros: '', he50: '', he100: '', dsr: '', adNoturno: '', outros: '', descontos: '', isFixo: false, categoria: ''
   });
   
-  // Efeito para popular dados no MODO EDIÇÃO
   useEffect(() => {
     if (editItem) {
       const toInputDate = (str) => {
@@ -540,9 +599,8 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
       } else if (tipo === 'cartao') {
         setFormData(p => ({...p, data: toInputDate(d[5]), isFixo: safeString(d[6]).toUpperCase()==='FIXO', valor: d[7], nome: d[8], categoria: d[9], banco: d[10]}));
       } else if (tipo === 'salario') {
-        setFormData(p => ({...p, data: toInputDate(d[5]), valor: d[6], he50: d[7], he100: d[8], descontos: d[9]}));
+        setFormData(p => ({...p, data: toInputDate(d[5]), valor: d[6], he50: d[7], descontos: d[9]})); // Simplificado pra edição
       } else if (tipo === 'ativo') {
-        // Histórico de ordens ou Fixos. Simplificado assumindo que a tabela Fixos usa dados diferentes
         if(d.length > 0) setFormData(p => ({...p, data: toInputDate(d[5]), nome: d[6] || d[0], valor: d[7] || d[2], juros: d[8] || d[3], ativoTipo: d[9] || 'Renda Fixa'}));
       }
     }
@@ -591,20 +649,37 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
               }
             } else if (tipo === 'salario') {
               abaDestino = 'bdRendas'; 
-              const b = parseFloat(formData.valor)||0; const h5 = parseFloat(formData.he50)||0; const h1 = parseFloat(formData.he100)||0; const d = parseFloat(formData.descontos)||0;
-              payload = [dataBR, b, h5, h1, d, b+h5+h1-d, editItem ? editItem.dados[11] : "App"];
+              const b = parseFloat(formData.valor)||0; 
+              const h5 = parseFloat(formData.he50)||0; 
+              const h1 = parseFloat(formData.he100)||0; 
+              const dsr = parseFloat(formData.dsr)||0;
+              const adNoturno = parseFloat(formData.adNoturno)||0;
+              const outros = parseFloat(formData.outros)||0;
+              const d = parseFloat(formData.descontos)||0;
+              
+              const totalExtrasAgrupado = dsr + adNoturno + outros;
+              const totalHEs = h5 + h1;
+              const liquido = b + totalHEs + totalExtrasAgrupado - d;
+              const detalhesObs = `HE50: ${h5} | HE100: ${h1} | DSR: ${dsr} | Noturno: ${adNoturno} | Outros: ${outros}`;
+
+              payload = [dataBR, b, totalHEs, totalExtrasAgrupado, d, liquido, detalhesObs];
             }
             onSave(payload, abaDestino, editItem?.linha);
           }}>
 
             {tipo === 'salario' ? (
                <>
-               <input type="number" step="any" placeholder="Salário Bruto R$" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
-               <div className="grid grid-cols-2 gap-4">
+               <input type="number" step="any" placeholder="Salário Base R$" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
+               <div className="grid grid-cols-2 gap-3">
                  <input type="number" step="any" placeholder="Extra 50% R$" value={formData.he50} className={inputClass} onChange={e => setFormData({...formData, he50: e.target.value})} />
                  <input type="number" step="any" placeholder="Extra 100% R$" value={formData.he100} className={inputClass} onChange={e => setFormData({...formData, he100: e.target.value})} />
+                 <input type="number" step="any" placeholder="DSR R$" value={formData.dsr} className={inputClass} onChange={e => setFormData({...formData, dsr: e.target.value})} />
+                 <input type="number" step="any" placeholder="Ad. Noturno R$" value={formData.adNoturno} className={inputClass} onChange={e => setFormData({...formData, adNoturno: e.target.value})} />
                </div>
-               <input type="number" step="any" placeholder="Descontos R$" value={formData.descontos} className={`${inputClass} border-red-500/50 text-red-400`} onChange={e => setFormData({...formData, descontos: e.target.value})} />
+               <div className="grid grid-cols-2 gap-3">
+                 <input type="number" step="any" placeholder="Outros (+) R$" value={formData.outros} className={inputClass} onChange={e => setFormData({...formData, outros: e.target.value})} />
+                 <input type="number" step="any" placeholder="Descontos (-) R$" value={formData.descontos} className={`${inputClass} border-red-500/50 text-red-400`} onChange={e => setFormData({...formData, descontos: e.target.value})} />
+               </div>
              </>
             ) : tipo === 'cartao' ? (
               <>
