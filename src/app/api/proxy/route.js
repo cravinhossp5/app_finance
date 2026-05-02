@@ -1,38 +1,31 @@
 import { NextResponse } from 'next/server';
 
+export const runtime = 'edge'; // Força a execução rápida na Cloudflare
+
 export async function POST(request) {
   try {
     const body = await request.json();
     
-    // Puxando a URL do Google Apps Script das variáveis de ambiente (Segurança)
-    const googleUrl = process.env.NEXT_PUBLIC_API_URL;
-    
-    if (!googleUrl) {
-      return NextResponse.json({ error: "A URL da API (Google Apps Script) não está configurada no Cloudflare." }, { status: 500 });
+    // Puxa o link do Google Script das variáveis da Cloudflare
+    const targetUrl = process.env.NEXT_PUBLIC_API_URL;
+
+    if (!targetUrl) {
+      return NextResponse.json({ error: "URL de destino não configurada" }, { status: 500 });
     }
 
-    // Despachando os dados para a planilha
-    const response = await fetch(googleUrl, {
+    const response = await fetch(targetUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      // Embutindo o Token de Segurança automaticamente
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...body,
-        token: 'Mu#22042002' 
+        token: process.env.API_TOKEN || "Mu#22042002" // Token de segurança
       }),
     });
 
     const data = await response.json();
-    return NextResponse.json(data, { status: response.status });
+    return NextResponse.json(data);
 
   } catch (error) {
-    return NextResponse.json({ error: "Falha na ponte de comunicação (Proxy)." }, { status: 500 });
+    return NextResponse.json({ error: "Falha na ponte (Proxy)", details: error.message }, { status: 500 });
   }
-}
-
-// Opcional: Um GET simples para testar se a ponte está de pé
-export async function GET() {
-  return NextResponse.json({ status: "Ponte Next.js <> Google Sheets OK", version: "1.0" });
 }
