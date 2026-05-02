@@ -5,12 +5,9 @@ import {
   TrendingUp, LayoutDashboard, Receipt, Users, PlusCircle, Landmark, X, CheckCircle, 
   ChevronLeft, ChevronRight, CreditCard, HandCoins, Loader2, AlertCircle, RefreshCw, 
   Building2, Wallet, Coins, Briefcase, CalendarClock, ChevronDown, Banknote, PieChart,
-  ArrowLeft, Edit, Trash2, RotateCcw, FastForward, Info, History
+  ArrowLeft, Edit, Trash2, RotateCcw, FastForward, Info, History, Activity
 } from 'lucide-react';
 
-// ==========================================
-// TRADUTOR FINANCEIRO E CÁLCULO BANCÁRIO
-// ==========================================
 const safeString = (val) => String(val || '').trim();
 
 const parseCurrency = (val) => {
@@ -44,17 +41,14 @@ function formatDateToBR(dateObj) {
   return `${String(dateObj.getDate()).padStart(2, '0')}/${String(dateObj.getMonth() + 1).padStart(2, '0')}/${dateObj.getFullYear()}`;
 }
 
-// MOTOR DE JUROS COMPOSTOS (Simulador de CDI com IR)
 const calcFixa = (vA, taxInput, dataApp) => {
   if (!vA || !dataApp) return { bruto: vA || 0, liquido: vA || 0, ir: 0, lucro: 0 };
-  
   const hoje = new Date();
   const diffTime = Math.max(0, hoje - dataApp);
   const diasCorridos = Math.floor(diffTime / (1000 * 60 * 60 * 24));
   
   let dailyRate;
   if (taxInput > 20) { 
-     // Calculo CDI Base 252 (Aproximando CDI médio do último ano em ~11.15%)
      const cdiAnual = 0.1115; 
      const taxEfetivaAnual = cdiAnual * (taxInput / 100);
      dailyRate = Math.pow(1 + taxEfetivaAnual, 1/252) - 1;
@@ -62,13 +56,10 @@ const calcFixa = (vA, taxInput, dataApp) => {
      dailyRate = Math.pow(1 + (taxInput / 100), 1/30) - 1;
   }
   
-  // Aproximação de dias úteis
   const diasUteis = taxInput > 20 ? (diasCorridos * (252/365)) : diasCorridos;
-  
   const montanteBruto = vA * Math.pow(1 + dailyRate, diasUteis);
   const lucroBruto = montanteBruto - vA;
   
-  // Tabela Regressiva IR
   let irRate = 0;
   if (taxInput > 20) { 
      if (diasCorridos <= 180) irRate = 0.225;
@@ -78,9 +69,7 @@ const calcFixa = (vA, taxInput, dataApp) => {
   }
   
   const descontoIR = lucroBruto * irRate;
-  const montanteLiquido = montanteBruto - descontoIR;
-  
-  return { bruto: montanteBruto, liquido: montanteLiquido, ir: descontoIR, lucro: lucroBruto };
+  return { bruto: montanteBruto, liquido: montanteBruto - descontoIR, ir: descontoIR, lucro: lucroBruto };
 };
 
 export default function Dashboard() {
@@ -91,7 +80,6 @@ export default function Dashboard() {
   const [editItem, setEditItem] = useState(null); 
   const [syncStatus, setSyncStatus] = useState('synced'); 
   const [notification, setNotification] = useState(null);
-  
   const [customDialog, setCustomDialog] = useState(null);
 
   const meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
@@ -105,6 +93,7 @@ export default function Dashboard() {
   const [salarios, setSalarios] = useState([]);
   const [historicoOrdens, setHistoricoOrdens] = useState([]);
   const [meusBancos, setMeusBancos] = useState([]);
+  const [cryptoLivePrices, setCryptoLivePrices] = useState({});
   
   const [clienteAtivo, setClienteAtivo] = useState(null);
   const [carteiraDetalhe, setCarteiraDetalhe] = useState(null);
@@ -117,17 +106,24 @@ export default function Dashboard() {
   const fetchDados = async (silent = false) => {
     if (!silent) setSyncStatus('syncing');
     try {
-      const fetchData = async (aba) => {
-        const res = await fetch('/api/proxy', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'listar', aba, token: "Mu#22042002" })
-        });
+      // 1. Busca Cotação Ao Vivo da Binance
+      fetch('https://api.binance.com/api/v3/ticker/price')
+        .then(r => r.json())
+        .then(data => {
+            const prices = {};
+            data.forEach(i => { if(i.symbol.endsWith('BRL')) prices[i.symbol.replace('BRL', '')] = parseFloat(i.price); });
+            setCryptoLivePrices(prices);
+        }).catch(() => console.log("Binance offline, usando preços salvos."));
+
+      // 2. Busca Dados da Planilha
+      const call = async (aba) => {
+        const res = await fetch('/api/proxy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'listar', aba, token: "Mu#22042002" }) });
         return await res.json();
       };
 
       const [varData, fixData, cartData, devData, bancosData, salarioData, ordensData] = await Promise.all([
-        fetchData('DB_Investimentos_Variaveis'), fetchData('DB_Investimentos_Fixos'), fetchData('bdLancamentos'),
-        fetchData('bdDevedores'), fetchData('meus_bancos'), fetchData('bdRendas'), fetchData('DB_Historico_Ordens')
+        call('DB_Investimentos_Variaveis'), call('DB_Investimentos_Fixos'), call('bdLancamentos'),
+        call('bdDevedores'), call('meus_bancos'), call('bdRendas'), call('DB_Historico_Ordens')
       ]);
 
       if (varData?.success) setAtivosVariaveis(varData.data || []);
@@ -200,20 +196,14 @@ export default function Dashboard() {
     gastosCartao.forEach(g => {
       const d = parseDataBR(g.dados[5]); if (d && d.getMonth() === mesAtual && d.getFullYear() === anoAtual) saida += parseCurrency(g.dados[7]);
     });
-    
     devedores.forEach(dev => {
       const dAcordo = parseDataBR(dev.dados[5]); const vOriginal = parseCurrency(dev.dados[7]); const juros = parseCurrency(dev.dados[10]); const status = safeString(dev.dados[9]);
       const hoje = new Date(); let m = 0;
       if (dAcordo) { m = (hoje.getFullYear() - dAcordo.getFullYear()) * 12 + (hoje.getMonth() - dAcordo.getMonth()); if (hoje.getDate() < dAcordo.getDate()) m--; m = Math.max(0, m); }
       const montanteFinal = vOriginal + (vOriginal * (juros/100) * m);
-      
-      if (dAcordo && dAcordo.getMonth() === mesAtual && dAcordo.getFullYear() === anoAtual) {
-        if(status !== 'Concluído') saida += vOriginal; 
-      }
-      
+      if (dAcordo && dAcordo.getMonth() === mesAtual && dAcordo.getFullYear() === anoAtual && status !== 'Concluído') saida += vOriginal; 
       if (status === 'Concluído' && dAcordo && dAcordo.getMonth() === mesAtual && dAcordo.getFullYear() === anoAtual) { renda += montanteFinal; lucroCobrança += (montanteFinal - vOriginal); }
     });
-
     historicoOrdens.forEach(o => {
       const d = parseDataBR(o.dados[5]); const valor = parseCurrency(o.dados[8]) * parseCurrency(o.dados[9]);
       if (d && d.getMonth() === mesAtual && d.getFullYear() === anoAtual) {
@@ -223,8 +213,6 @@ export default function Dashboard() {
     });
     return { renda, saida, livre: renda - saida, lucroCobrança };
   };
-
-  const dadosCaixa = calcCaixaLivre();
 
   if (isGlobalLoading) {
     return (
@@ -280,9 +268,9 @@ export default function Dashboard() {
       </header>
 
       <div className="p-4 max-w-2xl mx-auto space-y-6">
-        {activeTab === 'dashboard' && <ResumoView dadosCaixa={dadosCaixa} salarios={salarios} mes={mesAtual} ano={anoAtual} onEdit={i => abrirEdicao(i, 'salario')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdRendas', linha: l, message: 'Isso apagará o lançamento do histórico.' })} />}
-        {activeTab === 'patrimonio' && !carteiraDetalhe && <CarteiraView ativosVar={ativosVariaveis} hist={historicoOrdens} ativosFixos={ativosFixos} onAbrirDetalhe={setCarteiraDetalhe} />}
-        {activeTab === 'patrimonio' && carteiraDetalhe && <CarteiraDetalheView tipo={carteiraDetalhe} ativosVar={ativosVariaveis} hist={historicoOrdens} ativosFixos={ativosFixos} onVoltar={() => setCarteiraDetalhe(null)} onEdit={i => abrirEdicao(i, 'ativo')} onDelete={(l, a) => setCustomDialog({ type: 'delete', aba: a, linha: l, message: 'A aplicação será apagada do histórico.' })} />}
+        {activeTab === 'dashboard' && <ResumoView dadosCaixa={calcCaixaLivre()} salarios={salarios} mes={mesAtual} ano={anoAtual} onEdit={i => abrirEdicao(i, 'salario')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdRendas', linha: l, message: 'Isso apagará o lançamento do histórico.' })} />}
+        {activeTab === 'patrimonio' && !carteiraDetalhe && <CarteiraView ativosVar={ativosVariaveis} hist={historicoOrdens} ativosFixos={ativosFixos} liveCrypto={cryptoLivePrices} onAbrirDetalhe={setCarteiraDetalhe} />}
+        {activeTab === 'patrimonio' && carteiraDetalhe && <CarteiraDetalheView tipo={carteiraDetalhe} ativosVar={ativosVariaveis} hist={historicoOrdens} ativosFixos={ativosFixos} liveCrypto={cryptoLivePrices} onVoltar={() => setCarteiraDetalhe(null)} onEdit={i => abrirEdicao(i, 'ativo')} onDelete={(l, a) => setCustomDialog({ type: 'delete', aba: a, linha: l, message: 'A aplicação será apagada do histórico.' })} />}
         {activeTab === 'devedores' && !clienteAtivo && <DevedoresView items={devedores} onAbrirCliente={setClienteAtivo} />}
         {activeTab === 'devedores' && clienteAtivo && <ClienteDossieView nome={clienteAtivo} items={devedores} onVoltar={() => setClienteAtivo(null)} onStatusChange={(i, s) => handleGravarDados([i.dados[5], i.dados[6], i.dados[7], i.dados[8], s, i.dados[10], i.dados[11]], 'bdDevedores', i.linha)} onEdit={i => abrirEdicao(i, 'devedor')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdDevedores', linha: l, message: 'A dívida será apagada permanentemente.' })} onRolar={(item, totalAtual) => setCustomDialog({ type: 'rolar', item, totalAtual })} />}
         {activeTab === 'cartoes' && <CartoesView items={gastosCartao} onEdit={i => abrirEdicao(i, 'cartao')} onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdLancamentos', linha: l, message: 'A despesa sumirá da fatura.' })} />}
@@ -333,33 +321,39 @@ function ResumoView({ dadosCaixa, salarios, mes, ano, onEdit, onDelete }) {
   );
 }
 
-function CarteiraView({ ativosVar, hist, ativosFixos, onAbrirDetalhe }) {
-  // ÍNDICE 1 É A COLUNA 'B' ONDE FICA O TIPO NA PLANILHA
+function CarteiraView({ ativosVar, hist, ativosFixos, liveCrypto, onAbrirDetalhe }) {
   const acoes = ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('AÇÃO'));
   const fiis = ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('FII'));
   
-  // Resgate de Cripto: Se não achar na variável, caça no histórico
+  // Resgate Misto de Cripto + Integração Binance
   let cripto = ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('CRIPTO'));
-  const criptoHist = hist.filter(h => safeString(h.dados[10]).toUpperCase().includes('CRIPTO')).map(h => {
+  const existingCripto = cripto.map(a => safeString(a.dados[0]).toUpperCase());
+  const criptoHist = hist.filter(h => safeString(h.dados[10]).toUpperCase().includes('CRIPTO') && !existingCripto.includes(safeString(h.dados[6]).toUpperCase())).map(h => {
+      const ticker = safeString(h.dados[6]).toUpperCase();
       const qtd = parseCurrency(h.dados[8]); const pm = parseCurrency(h.dados[9]); const custo = qtd * pm;
-      const r = []; r[0]=h.dados[6]; r[1]=h.dados[10]; r[2]=qtd; r[3]=pm; r[4]=custo; r[5]=pm; r[6]=custo; r[7]=0; r[11]=0; r[12]="";
+      const precoAtual = liveCrypto[ticker] || pm; // MÁGICA AO VIVO DA BINANCE AQUI!
+      const valorMercado = qtd * precoAtual;
+      const r = []; r[0]=ticker; r[1]=h.dados[10]; r[2]=qtd; r[3]=pm; r[4]=custo; r[5]=precoAtual; r[6]=valorMercado; r[7]=valorMercado - custo; r[11]=0; r[12]="";
       return { linha: h.linha, dados: r, isHist: true };
   });
-  if (cripto.length === 0) cripto = criptoHist;
+  cripto = [...cripto, ...criptoHist];
 
   const cValorMercado = (lista) => lista.reduce((acc, i) => acc + parseCurrency(i.dados[6]), 0); 
   const provAcoes = acoes.reduce((acc, i) => acc + parseCurrency(i.dados[11]), 0); 
   const provFIIs = fiis.reduce((acc, i) => acc + parseCurrency(i.dados[11]), 0);
   
   const totalFixa = ativosFixos.reduce((acc, i) => {
-    const rf = calcFixa(parseCurrency(i.dados[8]), parseCurrency(i.dados[9]), parseDataBR(i.dados[5]));
+    const rf = calcFixa(parseCurrency(i.dados[7]), parseCurrency(i.dados[8]), parseDataBR(i.dados[5]));
     return acc + rf.liquido;
   }, 0);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       <div className="bg-indigo-900/20 border border-indigo-500/20 p-8 rounded-[2.5rem]">
-        <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1">Total em Carteira</p>
+        <div className="flex justify-between items-start mb-1">
+           <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Total em Carteira</p>
+           {Object.keys(liveCrypto).length > 0 && <Activity size={14} className="text-emerald-500 animate-pulse" title="Cotações Binance Ao Vivo" />}
+        </div>
         <p className="text-4xl font-black text-white">R$ {(cValorMercado(acoes) + cValorMercado(fiis) + cValorMercado(cripto) + totalFixa).toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
         
         <div className="grid grid-cols-2 gap-4 mt-6 pt-6 border-t border-indigo-500/20">
@@ -378,10 +372,10 @@ function CarteiraView({ ativosVar, hist, ativosFixos, onAbrirDetalhe }) {
   );
 }
 
-function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, onVoltar, onEdit, onDelete }) {
+function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, liveCrypto, onVoltar, onEdit, onDelete }) {
   const isF = tipo === 'Renda Fixa';
-  
   let lista = [];
+  
   if (isF) {
     lista = ativosFixos;
   } else {
@@ -390,8 +384,16 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, onVoltar, onE
     const histList = hist.filter(h => safeString(h.dados[10]).toUpperCase().includes(tipo.toUpperCase()) && !existingTickers.includes(safeString(h.dados[6]).toUpperCase()));
     
     const mappedHist = histList.map(h => {
+        const ticker = safeString(h.dados[6]).toUpperCase();
         const qtd = parseCurrency(h.dados[8]); const pm = parseCurrency(h.dados[9]); const custo = qtd * pm;
-        const r = []; r[0]=h.dados[6]; r[1]=h.dados[10]; r[2]=qtd; r[3]=pm; r[4]=custo; r[5]=pm; r[6]=custo; r[7]=0; r[11]=0; r[12]="";
+        
+        let precoAtual = pm;
+        if(tipo === 'Cripto' && liveCrypto[ticker]) precoAtual = liveCrypto[ticker];
+        
+        const valorMercado = qtd * precoAtual;
+        const lucroAbs = valorMercado - custo;
+
+        const r = []; r[0]=ticker; r[1]=h.dados[10]; r[2]=qtd; r[3]=pm; r[4]=custo; r[5]=precoAtual; r[6]=valorMercado; r[7]=lucroAbs; r[11]=0; r[12]="";
         return { linha: h.linha, dados: r, isHist: true };
     });
     lista = [...list, ...mappedHist];
@@ -406,27 +408,26 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, onVoltar, onE
         <div className="mb-4 bg-slate-900/50 p-4 rounded-2xl border border-slate-800 flex items-start gap-3">
           <Info size={20} className="text-blue-500 shrink-0 mt-0.5"/> 
           <p className="text-[10px] text-slate-400 leading-relaxed font-bold">
-            Para garantir a segurança das suas fórmulas, as edições de Ativos Variáveis devem ser feitas diretamente na aba <b>DB_Investimentos_Variaveis</b> no Sheets.
+            Para proteger suas fórmulas automáticas de cotação da B3, altere Ações e FIIs diretamente na sua planilha (Aba DB_Investimentos_Variaveis).
           </p>
         </div>
       )}
 
       {lista.length === 0 ? <p className="text-xs text-slate-600 italic">Nenhum ativo listado.</p> : lista.map((i, idx) => {
           if(isF) {
-            // MATEMÁTICA REAL DE CDB
             const dataApp = parseDataBR(i.dados[5]); const dataVenc = parseDataBR(i.dados[6]);
-            const vA = parseCurrency(i.dados[8]); const taxa = parseCurrency(i.dados[9]);
+            const vA = parseCurrency(i.dados[7]); const taxa = parseCurrency(i.dados[8]);
             const calc = calcFixa(vA, taxa, dataApp);
             
             return (
               <div key={idx} className="p-5 bg-slate-900 border border-slate-800 rounded-[2rem]">
                 <div className="flex justify-between items-start mb-4">
-                  <div><p className="font-black text-lg uppercase text-slate-100">{i.dados[7]}</p><p className="text-[10px] font-bold text-slate-500 uppercase">{i.dados[10]} • Taxa: {i.dados[9]} {taxa > 20 ? '% CDI' : '% a.m'}</p></div>
+                  <div><p className="font-black text-lg uppercase text-slate-100">{i.dados[2]}</p><p className="text-[10px] font-bold text-slate-500 uppercase">{i.dados[4]} • Taxa: {i.dados[8]} {taxa > 20 ? '% CDI' : '% a.m'}</p></div>
                   <div className="flex gap-2"><button onClick={() => onEdit(i)} className="bg-slate-800 p-3 rounded-xl text-blue-400 active:scale-90"><Edit size={20}/></button><button onClick={() => onDelete(i.linha, 'DB_Investimentos_Fixos')} className="bg-slate-800 p-3 rounded-xl text-red-400 active:scale-90"><Trash2 size={20}/></button></div>
                 </div>
                 <div className="grid grid-cols-2 gap-4 border-t border-slate-800 pt-4 mt-2">
                   <div><p className="text-[8px] font-black text-slate-500 uppercase">Aplicado em {formatDateToBR(dataApp)}</p><p className="text-sm font-black text-slate-300">R$ {vA.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Juros (Bruto)</p><p className="text-sm font-black text-blue-400">+R$ {calc.lucro.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Juros Bruto / Rendimento</p><p className="text-sm font-black text-blue-400">+R$ {calc.lucro.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
                   <div><p className="text-[8px] font-black text-slate-500 uppercase">Imposto de Renda Retido</p><p className="text-sm font-black text-red-400">-R$ {calc.ir.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
                   <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Líquido Disponível</p><p className="text-sm font-black text-emerald-400">R$ {calc.liquido.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
                   {dataVenc && (
@@ -437,7 +438,6 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, onVoltar, onE
             )
           }
 
-          // VARIÁVEL (Ações, FII, Cripto)
           const ticker = i.dados[0]; const qtd = parseCurrency(i.dados[2]); const precoMedio = parseCurrency(i.dados[3]); 
           const custoTotal = parseCurrency(i.dados[4]); const valorMercado = parseCurrency(i.dados[6]); 
           const lucroAbs = parseCurrency(i.dados[7]); const provento = parseCurrency(i.dados[11]); const dataProv = safeString(i.dados[12]); 
@@ -450,7 +450,7 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, onVoltar, onE
               </div>
               <div className="grid grid-cols-2 gap-4 border-t border-slate-800 pt-4 mt-2">
                 <div><p className="text-[8px] font-black text-slate-500 uppercase">Investido (Custo)</p><p className="text-sm font-black text-slate-300">R$ {custoTotal.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-                <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Valor Atual (Mercado)</p><p className="text-sm font-black text-emerald-400">R$ {valorMercado.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+                <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Valor Atual</p><p className="text-sm font-black text-emerald-400">R$ {valorMercado.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
                 <div><p className="text-[8px] font-black text-slate-500 uppercase">{tipo === 'Cripto' ? 'Valorização' : 'Lucro Absoluto'}</p><p className={`text-sm font-black ${lucroAbs >= 0 ? 'text-blue-400' : 'text-red-400'}`}>R$ {lucroAbs.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
                 {tipo !== 'Cripto' && (
                   <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Proventos Previstos</p><p className="text-sm font-black text-violet-400">R$ {provento.toLocaleString('pt-BR', {minimumFractionDigits:2})} • {dataProv || '--/--'}</p></div>
@@ -466,16 +466,14 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, onVoltar, onE
 function DevedoresView({ items, onAbrirCliente }) {
   const c = {}; let tE = 0; let tR = 0; let luc = 0;
   items.forEach(i => {
-    const n = safeString(i.dados[6]) || 'Sem Nome'; if(!c[n]) c[n] = { n, e: 0, p: 0, a: 0, tot: 0 };
+    const n = safeString(i.dados[6]) || 'Sem Nome'; if(!c[n]) c[n] = { n, e: 0, p: 0, a: 0 };
     const emp = parseCurrency(i.dados[7]); const status = safeString(i.dados[9]); const j = parseCurrency(i.dados[10]); const dO = parseDataBR(i.dados[5]);
     const hoje = new Date(); let m = 0;
     if(dO) { m = (hoje.getFullYear() - dO.getFullYear()) * 12 + (hoje.getMonth() - dO.getMonth()); if (hoje.getDate() < dO.getDate()) m--; m = Math.max(0, m); }
     const montante = emp + (emp * (j/100) * m);
     
-    // Todos entram na lista individual, mas o "Total Pendente" lá no topo só conta os não concluídos
     if(status !== 'Concluído') { c[n].e += emp; c[n].a += 1; tE += emp; } 
     if(status === 'Concluído') { c[n].p += montante; tR += montante; luc += (montante - emp); } 
-    c[n].tot += 1; // Contador para renderizar todos os clientes
   });
   return (
     <div className="space-y-4 animate-in fade-in duration-300">
@@ -487,8 +485,7 @@ function DevedoresView({ items, onAbrirCliente }) {
           <div><p className="text-[9px] text-slate-500 uppercase font-black">Lucro Realizado</p><p className={`text-lg font-black ${luc >= 0 ? 'text-blue-400' : 'text-red-400'}`}>R$ {luc.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
         </div>
       </div>
-      {/* Removido o filtro de a > 0, agora mostra todos os clientes que têm histórico */}
-      {Object.values(c).map((cli, idx) => (
+      {Object.values(c).filter(cli => cli.a > 0).map((cli, idx) => (
         <div key={idx} onClick={() => onAbrirCliente(cli.n)} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center cursor-pointer active:scale-95 transition-all">
           <div className="flex gap-4 items-center"><div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center border border-amber-900/20"><Users size={20}/></div><div><p className="text-sm font-black">{cli.n}</p><p className="text-[9px] text-slate-500 uppercase">{cli.a} cobranças ativas</p></div></div>
           <p className="text-sm font-black text-amber-400">R$ {cli.e.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
@@ -607,7 +604,7 @@ function CartoesView({ items, onEdit, onDelete }) {
 }
 
 function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem }) {
-  const [formData, setFormData] = useState({ data: new Date().toISOString().split('T')[0], dataVenc: new Date().toISOString().split('T')[0], banco: meusBancos[0] || 'Dinheiro', ativoTipo: 'Ação', subTipo: 'CDB', nome: '', valor: '', juros: '', he50: '', he100: '', dsr: '', adNoturno: '', outros: '', descontos: '', isFixo: false, categoria: '' });
+  const [formData, setFormData] = useState({ data: new Date().toISOString().split('T')[0], dataVenc: new Date().toISOString().split('T')[0], banco: meusBancos[0] || 'Dinheiro', ativoTipo: 'Renda Fixa', subTipo: 'CDB', nome: '', valor: '', juros: '', he50: '', he100: '', dsr: '', adNoturno: '', outros: '', descontos: '', isFixo: false, categoria: '' });
   
   useEffect(() => {
     if (editItem) {
@@ -617,7 +614,6 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
       else if (tipo === 'salario') setFormData(p => ({...p, data: toInp(d[5]), valor: parseCurrency(d[6]), he50: parseCurrency(d[7]), he100: parseCurrency(d[8]), descontos: parseCurrency(d[10])})); 
       else if (tipo === 'ativo') {
          const isFixa = d[9] ? safeString(d[9]).includes('CDB') || safeString(d[9]).includes('CDI') || safeString(d[9]).includes('Tesouro') : false;
-         // Para edição de Fixa, repuxa os dados corretos:
          setFormData(p => ({...p, data: toInp(d[5]), dataVenc: toInp(d[6]), nome: d[7] || d[0], valor: parseCurrency(d[8] || d[2]), juros: parseCurrency(d[9] || d[3]), ativoTipo: isFixa ? 'Renda Fixa' : (d[9] || 'Ação'), subTipo: d[10] || 'CDB'}));
       }
     }
@@ -628,7 +624,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
   return (
     <div className="fixed inset-0 bg-black/95 backdrop-blur-md z-[100] flex items-end md:items-center justify-center p-4">
       <div className="bg-slate-900 w-full max-w-md rounded-[3rem] border border-slate-800 p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
-        <div className="flex justify-between items-center mb-8"><h3 className="font-black text-xl text-emerald-500">{editItem ? `Editar ${tipo}` : 'Novo Lançamento'}</h3><button onClick={onClose} className="p-3 bg-slate-800 rounded-full text-slate-500"><X size={24}/></button></div>
+        <div className="flex justify-between items-center mb-8"><h3 className="font-black text-xl text-emerald-500">{editItem ? `Editar ${tipo}` : 'Novo'}</h3><button onClick={onClose} className="p-3 bg-slate-800 rounded-full text-slate-500"><X size={24}/></button></div>
         {tipo === 'escolha' ? (
           <div className="grid grid-cols-2 gap-3"><ChoiceBtn onClick={() => setTipo('salario')} icon={<Banknote size={32} className="text-blue-400"/>} label="Salário" /><ChoiceBtn onClick={() => setTipo('cartao')} icon={<CreditCard size={32} className="text-indigo-400"/>} label="Gastos" /><ChoiceBtn onClick={() => setTipo('ativo')} icon={<Wallet size={32} className="text-emerald-400"/>} label="Ativos" /><ChoiceBtn onClick={() => setTipo('devedor')} icon={<Users size={32} className="text-amber-400"/>} label="Devedor" /></div>
         ) : (
@@ -638,7 +634,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
             if (tipo === 'devedor') { aba = 'bdDevedores'; p = [dBR, formData.nome, parseCurrency(formData.valor), vBR, editItem?.dados[9]||"Pendente", parseCurrency(formData.juros), "App"]; }
             else if (tipo === 'cartao') { aba = 'bdLancamentos'; p = [dBR, formData.isFixo?"Fixo":"Avulso", parseCurrency(formData.valor), formData.nome, formData.categoria, formData.banco, editItem?.dados[11]||"Pendente"]; }
             else if (tipo === 'ativo') { 
-              if (formData.ativoTipo === 'Renda Fixa') { aba = 'DB_Investimentos_Fixos'; p = [dBR, vBR, formData.nome, parseCurrency(formData.valor), parseCurrency(formData.juros), formData.subTipo]; }
+              if (formData.ativoTipo === 'Renda Fixa') { aba = 'DB_Investimentos_Fixos'; p = [dBR, vBR, formData.nome, parseCurrency(formData.valor), parseCurrency(formData.juros), formData.subTipo, "", ""]; }
               else { aba = 'DB_Historico_Ordens'; p = [dBR, formData.nome.toUpperCase(), "COMPRA", parseCurrency(formData.valor), parseCurrency(formData.juros), formData.ativoTipo, ""]; }
             } else if (tipo === 'salario') {
               aba = 'bdRendas'; const b = parseCurrency(formData.valor); const h5 = parseCurrency(formData.he50); const h1 = parseCurrency(formData.he100); const dsr = parseCurrency(formData.dsr); const adN = parseCurrency(formData.adNoturno); const out = parseCurrency(formData.outros); const d = parseCurrency(formData.descontos);
@@ -651,7 +647,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
             ) : tipo === 'cartao' ? (
               <><input type="text" placeholder="Descrição" value={formData.nome} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required /><div className="grid grid-cols-2 gap-4"><input type="number" step="any" placeholder="Valor" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><input type="text" placeholder="Categoria" value={formData.categoria} className={inputClass} onChange={e => setFormData({...formData, categoria: e.target.value})} required /></div><select className={`${inputClass} appearance-none`} value={formData.banco} onChange={e => setFormData({...formData, banco: e.target.value})}>{meusBancos.map((b, i) => <option key={i} value={b}>{b}</option>)}</select></>
             ) : tipo === 'devedor' ? (
-              <><input type="text" placeholder="Cliente" value={formData.nome} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required /><div className="grid grid-cols-2 gap-4"><input type="number" step="any" placeholder="Valor Emprestado" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><input type="number" step="any" placeholder="Juros a.m (%)" value={formData.juros} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required /></div><div className="bg-slate-950 p-4 rounded-2xl border border-slate-800"><span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Data Acordada para Pgto.</span><input type="date" value={formData.dataVenc} className={`${inputClass} !bg-slate-900 border-none !p-2`} onChange={e => setFormData({...formData, dataVenc: e.target.value})} /></div></>
+              <><input type="text" placeholder="Cliente" value={formData.nome} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required /><div className="grid grid-cols-2 gap-4"><input type="number" step="any" placeholder="Valor Emprestado" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><input type="number" step="any" placeholder="Juros a.m (%)" value={formData.juros} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required /></div><div className="bg-slate-950 p-4 rounded-2xl border border-slate-800"><span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Data Acordada para Pgto.</span><input type="date" value={formData.dataVenc} className={`${inputClass} !bg-slate-900 border-none !p-2 text-amber-500`} onChange={e => setFormData({...formData, dataVenc: e.target.value})} /></div></>
             ) : (
               <>
                 <div className="flex bg-slate-950 p-1 rounded-2xl mb-4 gap-1">
@@ -666,16 +662,16 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
                     ))}
                   </div>
                 )}
-                <input type="text" placeholder={formData.ativoTipo==='Renda Fixa' ? "Nome (ex: CDB Inter)" : "Ticker"} value={formData.nome} className={`${inputClass} uppercase`} onChange={e => setFormData({...formData, nome: e.target.value})} required />
-                <div className="grid grid-cols-2 gap-4"><input type="number" step="any" placeholder={formData.ativoTipo==='Renda Fixa'?"Valor Aplicado":"Qtd/Aporte"} value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><input type="number" step="any" placeholder={formData.ativoTipo==='Renda Fixa'?"Taxa Acordada %":"Preço / Custo"} value={formData.juros} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required /></div>
+                <input type="text" placeholder={formData.ativoTipo==='Renda Fixa' ? "Instituição (ex: CDB C6)" : "Ticker da B3 ou Crypto"} value={formData.nome} className={`${inputClass} uppercase`} onChange={e => setFormData({...formData, nome: e.target.value})} required />
+                <div className="grid grid-cols-2 gap-4"><input type="number" step="any" placeholder={formData.ativoTipo==='Renda Fixa'?"Valor Aplicado R$":"Quantidade"} value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><input type="number" step="any" placeholder={formData.ativoTipo==='Renda Fixa'?"Taxa (% CDI ou % a.m)":"Preço de Custo R$"} value={formData.juros} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required /></div>
                 
                 {formData.ativoTipo === 'Renda Fixa' && (
                   <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800"><span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Data de Vencimento</span><input type="date" value={formData.dataVenc} className={`${inputClass} !bg-slate-900 border-none !p-2 text-amber-500`} onChange={e => setFormData({...formData, dataVenc: e.target.value})} /></div>
                 )}
               </>
             )}
-            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800"><span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">{tipo === 'ativo' && formData.ativoTipo === 'Renda Fixa' ? 'Data da Aplicação' : (tipo === 'devedor' ? 'Data que Emprestou' : 'Data da Transação')}</span><input type="date" value={formData.data} className={`${inputClass} !bg-slate-900 border-none !p-2`} onChange={e => setFormData({...formData, data: e.target.value})} /></div>
-            <button type="submit" className="w-full bg-emerald-600 text-white py-6 rounded-3xl font-black uppercase tracking-widest text-xs mt-4 active:scale-95 transition-all">{editItem ? "Atualizar" : "Salvar Lançamento"}</button>
+            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800"><span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">{tipo === 'ativo' && formData.ativoTipo === 'Renda Fixa' ? 'Data da Aplicação' : (tipo === 'devedor' ? 'Data que Emprestou' : 'Data da Transação')}</span><input type="date" value={formData.data} className={`${inputClass} !bg-slate-900 border-none !p-2 text-emerald-500`} onChange={e => setFormData({...formData, data: e.target.value})} /></div>
+            <button type="submit" className="w-full bg-emerald-600 text-white py-6 rounded-3xl font-black uppercase tracking-widest text-xs mt-4 active:scale-95 transition-all">{editItem ? "Atualizar Registro" : "Salvar Lançamento"}</button>
           </form>
         )}
       </div>
