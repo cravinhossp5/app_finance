@@ -5,18 +5,8 @@ import {
   TrendingUp, LayoutDashboard, Receipt, Users, PlusCircle, Landmark, X, CheckCircle, 
   ChevronLeft, ChevronRight, CreditCard, HandCoins, Loader2, AlertCircle, RefreshCw, 
   Building2, Wallet, Coins, Briefcase, CalendarClock, ChevronDown, Banknote, PieChart,
-  History, ArrowLeft
+  ArrowLeft
 } from 'lucide-react';
-
-// ==========================================
-// CONFIGURAÇÃO DOS CARTÕES (AJUSTE COM SEUS DIAS)
-// ==========================================
-const CONFIG_CARTOES = {
-  'Inter': { fechamento: 10, vencimento: 15 },
-  'Nubank': { fechamento: 25, vencimento: 2 },
-  'C6Bank': { fechamento: 20, vencimento: 25 },
-  'Dinheiro': null // Ignora lógica de fatura
-};
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('dashboard'); 
@@ -34,10 +24,12 @@ export default function Dashboard() {
   const [ativosFixos, setAtivosFixos] = useState([]);
   const [gastosCartao, setGastosCartao] = useState([]);
   const [devedores, setDevedores] = useState([]);
-  const [meusBancos, setMeusBancos] = useState([]);
   const [salarios, setSalarios] = useState([]);
+  
+  // Novos estados para a aba meus_bancos dinâmica
+  const [meusBancos, setMeusBancos] = useState([]);
+  const [bancosConfig, setBancosConfig] = useState({});
 
-  // Estado para abrir o Histórico do Cliente
   const [clienteAtivo, setClienteAtivo] = useState(null);
 
   const showToast = (message, type = 'success') => {
@@ -73,9 +65,20 @@ export default function Dashboard() {
       if (devData?.success) setDevedores(devData.data || []);
       if (salarioData?.success) setSalarios(salarioData.data || []);
       
-      if (bancosData?.success) {
-        const bancosLimpos = bancosData.data.map(b => b.dados[0]).filter(b => b && b !== "Banco");
-        setMeusBancos(bancosLimpos.length > 0 ? bancosLimpos : Object.keys(CONFIG_CARTOES));
+      // Mapeando a aba meus_bancos
+      if (bancosData?.success && bancosData.data) {
+        const configObj = {};
+        bancosData.data.forEach(b => {
+          // b.dados[0] = Banco, b.dados[1] = fechamento, b.dados[2] = vencimento
+          if(b.dados[0] && b.dados[0].toLowerCase() !== "banco") {
+            configObj[b.dados[0]] = {
+              fechamento: parseInt(b.dados[1], 10) || 31,
+              vencimento: parseInt(b.dados[2], 10) || 1
+            };
+          }
+        });
+        setBancosConfig(configObj);
+        setMeusBancos(Object.keys(configObj).length > 0 ? Object.keys(configObj) : ['Dinheiro']);
       }
       
       setSyncStatus('synced');
@@ -121,7 +124,7 @@ export default function Dashboard() {
         item.dados[6],  // Nome
         item.dados[7],  // Valor Total
         item.dados[8],  // Data Pgto Combinada
-        novoStatus,     // Motivo (Pendente/Concluído)
+        novoStatus,     // Motivo
         item.dados[10], // Juros
         item.dados[11]  // Obs
       ];
@@ -132,8 +135,7 @@ export default function Dashboard() {
         body: JSON.stringify({ action: 'atualizar', aba: 'bdDevedores', linha: item.linha, payload })
       });
       
-      const result = await res.json();
-      if (result.success) {
+      if ((await res.json()).success) {
         showToast(`Dívida ${novoStatus}!`);
         fetchDados(true);
       } else throw new Error();
@@ -147,12 +149,15 @@ export default function Dashboard() {
     setSyncStatus('syncing');
     showToast(`Marcando como Paga...`, "info");
     try {
+      // Mapeamento EXATO da sua aba bdLancamentos (F até L)
       const payload = [
-        item.dados[5], // Categoria
-        item.dados[6], // Banco
-        item.dados[7], // Valor
-        item.dados[8], // Data
-        "Paga"         // Coluna J (Adicione "Status Pagamento" na Col J de bdLancamentos)
+        item.dados[5], // F: Data Lançamento
+        item.dados[6], // G: Tipo
+        item.dados[7], // H: Valor
+        item.dados[8], // I: Descrição
+        item.dados[9], // J: Categoria
+        item.dados[10], // K: Conta/Cartão
+        "Paga"         // L: Status
       ];
       const res = await fetch('/api/proxy', {
         method: 'POST',
@@ -173,38 +178,35 @@ export default function Dashboard() {
   const calcCaixaLivre = () => {
     let rendaMes = 0; let gastoMes = 0; let investimentoMes = 0; let emprestadoMes = 0; let recebidoMes = 0;
 
-    // Renda do Mês
     salarios.forEach(s => {
       const d = parseDataBR(s.dados[5]);
       if (d.getMonth() === mesAtual && d.getFullYear() === anoAtual) rendaMes += (parseFloat(s.dados[9]) || 0);
     });
 
-    // Gastos do Mês
+    // Gastos baseados na aba bdLancamentos (Data Lançamento na Col F (5), Valor na Col H (7))
     gastosCartao.forEach(g => {
-      const d = parseDataBR(g.dados[8]);
+      const d = parseDataBR(g.dados[5]);
       if (d.getMonth() === mesAtual && d.getFullYear() === anoAtual) gastoMes += (parseFloat(g.dados[7]) || 0);
     });
 
-    // Investimentos do Mês (Dinheiro que saiu da conta pra corretora)
     ativosVariaveis.forEach(a => {
-      const d = parseDataBR(a.dados[5]); // Assumindo Data na F
-      const tipoOp = a.dados[6]?.toUpperCase(); // Assumindo Tipo_Op na G
-      const valor = parseFloat(a.dados[4]) || 0; // Custo na E
+      const d = parseDataBR(a.dados[5]); 
+      const tipoOp = a.dados[6]?.toUpperCase(); 
+      const valor = parseFloat(a.dados[4]) || 0; 
       if (d.getMonth() === mesAtual && d.getFullYear() === anoAtual) {
         if (tipoOp === 'COMPRA') investimentoMes += valor;
-        if (tipoOp === 'VENDA') rendaMes += valor; // Volta pro caixa
+        if (tipoOp === 'VENDA') rendaMes += valor; 
       }
     });
 
-    // Empréstimos (Saiu e Voltou)
     devedores.forEach(dev => {
       const dAcordo = parseDataBR(dev.dados[5]);
       const valorOriginal = parseFloat(dev.dados[7]) || 0;
       const status = dev.dados[9];
-      const pago = parseFloat(dev.dados[3]) || 0; // Col D lida da planilha
+      const pago = parseFloat(dev.dados[3]) || 0; 
       
       if (dAcordo.getMonth() === mesAtual && dAcordo.getFullYear() === anoAtual) emprestadoMes += valorOriginal;
-      if (status === 'Concluído' && dAcordo.getMonth() === mesAtual) recebidoMes += pago; // Simplificação: assume que recebeu no mesmo mês ou ajustar pela data de baixa
+      if (status === 'Concluído' && dAcordo.getMonth() === mesAtual) recebidoMes += pago; 
     });
 
     const caixaLivre = rendaMes + recebidoMes - gastoMes - investimentoMes - emprestadoMes;
@@ -243,7 +245,7 @@ export default function Dashboard() {
         {activeTab === 'patrimonio' && <CarteiraView ativosVar={ativosVariaveis} ativosFixos={ativosFixos} />}
         {activeTab === 'devedores' && !clienteAtivo && <DevedoresView items={devedores} onAbrirCliente={setClienteAtivo} />}
         {activeTab === 'devedores' && clienteAtivo && <ClienteDossieView nome={clienteAtivo} items={devedores} onVoltar={() => setClienteAtivo(null)} onStatusChange={handleAtualizarDevedor} />}
-        {activeTab === 'cartoes' && <CartoesView items={gastosCartao} onPagar={handlePagarFatura} />}
+        {activeTab === 'cartoes' && <CartoesView items={gastosCartao} config={bancosConfig} onPagar={handlePagarFatura} />}
       </div>
 
       <nav className="fixed bottom-0 w-full bg-slate-950/95 backdrop-blur-2xl border-t border-slate-800/50 flex justify-around items-center p-3 z-50 pb-safe">
@@ -284,7 +286,7 @@ function ResumoView({ dadosCaixa }) {
         
         <div className="mt-6 flex flex-wrap gap-4 text-xs font-bold text-slate-400">
           <div className="flex flex-col"><span className="text-[9px] uppercase tracking-widest text-slate-500">Entradas Totais</span><span className="text-blue-400">+ R$ {dadosCaixa.renda.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span></div>
-          <div className="flex flex-col"><span className="text-[9px] uppercase tracking-widest text-slate-500">Saídas (Gastos/Ativos/Emp)</span><span className="text-red-400">- R$ {dadosCaixa.saida.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span></div>
+          <div className="flex flex-col"><span className="text-[9px] uppercase tracking-widest text-slate-500">Saídas Totais</span><span className="text-red-400">- R$ {dadosCaixa.saida.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span></div>
         </div>
       </div>
     </div>
@@ -348,10 +350,9 @@ function InfoCard({ icon, title, value, color }) {
 }
 
 // ==========================================
-// VIEW: COBRANÇAS (AGRUPADO POR CLIENTE)
+// VIEW: COBRANÇAS (AGRUPADO)
 // ==========================================
 function DevedoresView({ items, onAbrirCliente }) {
-  // Agrupa por nome
   const clientesObj = {};
   items.forEach(item => {
     const nome = item.dados[6] || 'Sem Nome';
@@ -368,7 +369,7 @@ function DevedoresView({ items, onAbrirCliente }) {
     <div className="space-y-4 animate-in fade-in duration-500">
       <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1 mb-4">Resumo por Cliente</h3>
       {clientesList.map((cli, idx) => {
-        const pendente = cli.totalEmprestado - cli.totalPago; // Simplificado sem juros dinâmico na visão macro
+        const pendente = cli.totalEmprestado - cli.totalPago;
         return (
           <div key={idx} onClick={() => onAbrirCliente(cli.nome)} className="p-4 bg-slate-900 border border-slate-800 hover:border-amber-500/50 rounded-3xl flex justify-between items-center cursor-pointer transition-all active:scale-95">
             <div className="flex items-center gap-4">
@@ -389,7 +390,7 @@ function DevedoresView({ items, onAbrirCliente }) {
 }
 
 // ==========================================
-// VIEW: DOSSIÊ DO CLIENTE (HISTÓRICO)
+// VIEW: DOSSIÊ DO CLIENTE
 // ==========================================
 function ClienteDossieView({ nome, items, onVoltar, onStatusChange }) {
   const dividas = items.filter(i => i.dados[6] === nome);
@@ -407,10 +408,9 @@ function ClienteDossieView({ nome, items, onVoltar, onStatusChange }) {
         const vOriginal = parseFloat(item.dados[7]) || 0;
         const juros = parseFloat(item.dados[10]) || 0;
         const dataAcordo = parseDataBR(item.dados[5]);
-        const dataVenc = parseDataBR(item.dados[8]); // Coluna I (Data Pagamento Combinada)
+        const dataVenc = parseDataBR(item.dados[8]); 
         const isConcluido = item.dados[9] === 'Concluído';
         
-        // Juros simples
         const hoje = new Date();
         let meses = (hoje.getFullYear() - dataAcordo.getFullYear()) * 12 + (hoje.getMonth() - dataAcordo.getMonth());
         if (hoje.getDate() < dataAcordo.getDate()) meses--;
@@ -444,29 +444,29 @@ function ClienteDossieView({ nome, items, onVoltar, onStatusChange }) {
 }
 
 // ==========================================
-// VIEW: CARTÕES (COM STATUS INTELIGENTE)
+// VIEW: CARTÕES (COM INTEGRAÇÃO DA ABA MEUS_BANCOS)
 // ==========================================
-function CartoesView({ items, onPagar }) {
+function CartoesView({ items, config, onPagar }) {
   const hoje = new Date();
   
   const calcularStatusFatura = (dataCompraStr, banco, statusPagamento) => {
     if (statusPagamento === 'Paga') return { label: 'Paga', color: 'text-slate-500', bg: 'bg-slate-800' };
     
-    const config = CONFIG_CARTOES[banco];
-    if (!config) return { label: 'Avulso', color: 'text-blue-400', bg: 'bg-blue-900/20' }; // Despesas em dinheiro/PIX
+    // Procura o banco na configuração lida da planilha
+    const configBanco = config[banco];
+    if (!configBanco) return { label: 'Avulso', color: 'text-blue-400', bg: 'bg-blue-900/20' }; 
 
     const dataCompra = parseDataBR(dataCompraStr);
     
-    // Simplificação de Fatura: Se a compra foi antes do fechamento deste mês, ela vence este mês.
     let mesVencimento = dataCompra.getMonth();
     let anoVencimento = dataCompra.getFullYear();
-    if (dataCompra.getDate() >= config.fechamento) {
+    if (dataCompra.getDate() >= configBanco.fechamento) {
       mesVencimento++;
       if (mesVencimento > 11) { mesVencimento = 0; anoVencimento++; }
     }
     
-    const dataVencimentoReal = new Date(anoVencimento, mesVencimento, config.vencimento);
-    const dataFechamentoReal = new Date(anoVencimento, mesVencimento - (dataCompra.getDate() >= config.fechamento ? 0 : 1), config.fechamento);
+    const dataVencimentoReal = new Date(anoVencimento, mesVencimento, configBanco.vencimento);
+    const dataFechamentoReal = new Date(anoVencimento, mesVencimento - (dataCompra.getDate() >= configBanco.fechamento ? 0 : 1), configBanco.fechamento);
 
     if (hoje > dataVencimentoReal) return { label: 'Vencido', color: 'text-red-400', bg: 'bg-red-900/30' };
     if (hoje > dataFechamentoReal && hoje <= dataVencimentoReal) return { label: 'Fechada', color: 'text-amber-400', bg: 'bg-amber-900/30' };
@@ -477,8 +477,9 @@ function CartoesView({ items, onPagar }) {
     <div className="space-y-4 animate-in fade-in duration-500">
       <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1 mb-4">Gestão de Lançamentos</h3>
       {items.map((item, idx) => {
-        const status = calcularStatusFatura(item.dados[8], item.dados[6], item.dados[9]); // Col J: Status Paga
-        const isFixo = item.dados[10] === 'Fixo'; // Assumindo Col K: Tipo (Fixo/Avulso)
+        // Mapeamento bdLancamentos: Data[5], Tipo[6], Valor[7], Descrição[8], Categoria[9], Conta[10], Status[11]
+        const status = calcularStatusFatura(item.dados[5], item.dados[10], item.dados[11]); 
+        const isFixo = item.dados[6] === 'Fixo';
 
         return (
           <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center">
@@ -488,9 +489,9 @@ function CartoesView({ items, onPagar }) {
               </div>
               <div>
                 <p className="font-black text-sm text-slate-100 flex items-center gap-2">
-                  {item.dados[5]} {isFixo && <span className="text-[8px] bg-indigo-900/50 text-indigo-400 px-2 py-0.5 rounded-md">FIXO</span>}
+                  {item.dados[8]} {isFixo && <span className="text-[8px] bg-indigo-900/50 text-indigo-400 px-2 py-0.5 rounded-md">FIXO</span>}
                 </p>
-                <p className="text-[9px] font-black text-slate-500 uppercase mt-1">{item.dados[6]} • <span className={status.color}>{status.label}</span></p>
+                <p className="text-[9px] font-black text-slate-500 uppercase mt-1">{item.dados[10]} • {item.dados[9]} • <span className={status.color}>{status.label}</span></p>
               </div>
             </div>
             <div className="text-right flex flex-col items-end gap-2">
@@ -507,7 +508,7 @@ function CartoesView({ items, onPagar }) {
 }
 
 // ==========================================
-// MODAL DE LANÇAMENTO (COM CONTA FIXA E VENCIMENTOS)
+// MODAL DE LANÇAMENTO
 // ==========================================
 function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos }) {
   const [formData, setFormData] = useState({ 
@@ -515,7 +516,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos }) {
     dataVenc: new Date().toISOString().split('T')[0], 
     banco: meusBancos[0] || 'Dinheiro', 
     ativoTipo: 'Ação',
-    nome: '', valor: '', juros: '', he50: '', he100: '', descontos: '', isFixo: false
+    nome: '', valor: '', juros: '', he50: '', he100: '', descontos: '', isFixo: false, categoria: ''
   });
   
   const inputClass = "w-full bg-slate-800 border border-slate-700/50 rounded-2xl p-4 text-white placeholder:text-slate-500 focus:border-emerald-500/50 focus:ring-1 outline-none transition-all text-sm font-bold";
@@ -550,7 +551,16 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos }) {
               payload = { "Data Acordo": dataBR, "Nome Devedor": formData.nome, "Valor Total": parseFloat(formData.valor)||0, "Data Pagamento Combinada": vencBR, "Motivo": "Pendente", "Valor Parcela": parseFloat(formData.juros)||0, "Observações": "App" };
             } else if (tipo === 'cartao') {
               abaDestino = 'bdLancamentos';
-              payload = { "Categoria": formData.nome, "Conta/Cartão": formData.banco, "Valor": parseFloat(formData.valor)||0, "Data": dataBR, "Status Pagamento": "Pendente", "Tipo Conta": formData.isFixo ? "Fixo" : "Avulso" };
+              // Mapeamento EXATO da aba bdLancamentos da Imagem 2 (F a L)
+              payload = { 
+                "Data Lançamento": dataBR, 
+                "Tipo": formData.isFixo ? "Fixo" : "Avulso", 
+                "Valor": parseFloat(formData.valor)||0, 
+                "Descrição": formData.nome, 
+                "Categoria": formData.categoria || "Geral", 
+                "Conta/Cartão": formData.banco, 
+                "Status": "Pendente" 
+              };
             } else if (tipo === 'ativo') {
               if (formData.ativoTipo === 'Renda Fixa') {
                 abaDestino = 'DB_Investimentos_Fixos';
@@ -578,15 +588,16 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos }) {
              </>
             ) : tipo === 'cartao' ? (
               <>
-                <input type="text" placeholder="Nome da Despesa" className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required />
+                <input type="text" placeholder="Descrição (Ex: Calça)" className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required />
                 <div className="grid grid-cols-2 gap-4">
                   <input type="number" step="any" placeholder="Valor R$" className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
-                  <div className="relative">
-                    <select className={selectClass} value={formData.banco} onChange={e => setFormData({...formData, banco: e.target.value})}>
-                      {meusBancos.map((banco, i) => <option key={i} value={banco}>{banco}</option>)}
-                    </select>
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" size={16}/>
-                  </div>
+                  <input type="text" placeholder="Categoria (Ex: Roupas)" className={inputClass} onChange={e => setFormData({...formData, categoria: e.target.value})} required />
+                </div>
+                <div className="relative">
+                  <select className={selectClass} value={formData.banco} onChange={e => setFormData({...formData, banco: e.target.value})}>
+                    {meusBancos.map((banco, i) => <option key={i} value={banco}>{banco}</option>)}
+                  </select>
+                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" size={16}/>
                 </div>
                 <label className="flex items-center gap-3 p-4 bg-slate-900 border border-slate-800 rounded-2xl cursor-pointer">
                   <input type="checkbox" className="w-5 h-5 accent-emerald-500 rounded-lg bg-slate-800 border-slate-700" onChange={e => setFormData({...formData, isFixo: e.target.checked})} />
@@ -623,7 +634,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos }) {
 
             {tipo !== 'devedor' && (
               <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800">
-                <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 block mb-1">Data da Transação</span>
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 block mb-1">Data do Lançamento</span>
                 <input type="date" value={formData.data} className={`${inputClass} !bg-transparent !border-none !p-1 text-emerald-500`} onChange={e => setFormData({...formData, data: e.target.value})} />
               </div>
             )}
