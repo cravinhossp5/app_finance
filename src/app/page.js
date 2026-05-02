@@ -98,7 +98,6 @@ export default function Dashboard() {
 
   useEffect(() => { fetchDados(); }, []);
 
-  // --- ATUALIZAÇÃO INSTANTÂNEA NA TELA (OPTIMISTIC UI) ---
   const applyOptimisticUpdate = (aba, linha, payload, action) => {
     const map = {
       'bdRendas': [salarios, setSalarios], 'bdLancamentos': [gastosCartao, setGastosCartao], 'bdDevedores': [devedores, setDevedores],
@@ -108,7 +107,7 @@ export default function Dashboard() {
     const [getter, setter] = map[aba];
 
     if (action === 'adicionar') {
-      const fullRow = ["", "", "", "", "", ...payload]; // Preenche o espaço das fórmulas (A a E)
+      const fullRow = ["", "", "", "", "", ...payload];
       setter([{ linha: Date.now(), dados: fullRow }, ...getter]);
     } else if (action === 'atualizar') {
       setter(getter.map(i => {
@@ -123,7 +122,7 @@ export default function Dashboard() {
   const handleGravarDados = async (payload, aba, linha = null) => {
     setIsModalOpen(false); setEditItem(null); 
     const action = linha ? 'atualizar' : 'adicionar';
-    applyOptimisticUpdate(aba, linha, payload, action); // MUDA NA HORA
+    applyOptimisticUpdate(aba, linha, payload, action);
     
     setSyncStatus('syncing');
     try {
@@ -134,7 +133,7 @@ export default function Dashboard() {
 
   const handleExcluir = async (linha, aba) => {
     if(!window.confirm('Excluir permanentemente?')) return;
-    applyOptimisticUpdate(aba, linha, null, 'excluir'); // MUDA NA HORA
+    applyOptimisticUpdate(aba, linha, null, 'excluir');
     setSyncStatus('syncing');
     try {
       const res = await fetch('/api/proxy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'excluir', aba, linha, token: "Mu#22042002" }) });
@@ -169,6 +168,8 @@ export default function Dashboard() {
     return { renda, saida, livre: renda - saida, lucroCobrança };
   };
 
+  const dadosCaixa = calcCaixaLivre();
+
   if (isGlobalLoading) {
     return (
       <div className="min-h-screen bg-slate-950 text-emerald-500 flex flex-col items-center justify-center font-black">
@@ -202,7 +203,7 @@ export default function Dashboard() {
       </header>
 
       <div className="p-4 max-w-2xl mx-auto space-y-6">
-        {activeTab === 'dashboard' && <ResumoView dadosCaixa={calcCaixaLivre()} salarios={salarios} mes={mesAtual} ano={anoAtual} onEdit={i => abrirEdicao(i, 'salario')} onDelete={l => handleExcluir(l, 'bdRendas')} />}
+        {activeTab === 'dashboard' && <ResumoView dadosCaixa={dadosCaixa} salarios={salarios} mes={mesAtual} ano={anoAtual} onEdit={i => abrirEdicao(i, 'salario')} onDelete={l => handleExcluir(l, 'bdRendas')} />}
         {activeTab === 'patrimonio' && !carteiraDetalhe && <CarteiraView ativosVar={ativosVariaveis} ativosFixos={ativosFixos} onAbrirDetalhe={setCarteiraDetalhe} />}
         {activeTab === 'patrimonio' && carteiraDetalhe && <CarteiraDetalheView tipo={carteiraDetalhe} ativosVar={ativosVariaveis} ativosFixos={ativosFixos} onVoltar={() => setCarteiraDetalhe(null)} onEdit={i => abrirEdicao(i, 'ativo')} onDelete={(l, a) => handleExcluir(l, a)} />}
         {activeTab === 'devedores' && !clienteAtivo && <DevedoresView items={devedores} onAbrirCliente={setClienteAtivo} />}
@@ -222,10 +223,6 @@ export default function Dashboard() {
     </main>
   );
 }
-
-// ==========================================
-// VIEWS DE INTERFACE
-// ==========================================
 
 function ResumoView({ dadosCaixa, salarios, mes, ano, onEdit, onDelete }) {
   const filtrados = salarios.filter(s => { const d = parseDataBR(s.dados[5]); return d && d.getMonth() === mes && d.getFullYear() === ano; });
@@ -251,6 +248,7 @@ function ResumoView({ dadosCaixa, salarios, mes, ano, onEdit, onDelete }) {
 }
 
 function CarteiraView({ ativosVar, ativosFixos, onAbrirDetalhe }) {
+  // ÍNDICES CORRIGIDOS: Valor de Mercado está na Coluna G (índice 6 da planilha geral)
   const cValorMercado = (lista) => lista.reduce((acc, i) => acc + (parseFloat(i.dados[6]) || 0), 0);
   const totalFixa = ativosFixos.reduce((acc, i) => acc + (parseFloat(i.dados[5]) || 0), 0);
   
@@ -280,16 +278,17 @@ function CarteiraDetalheView({ tipo, ativosVar, ativosFixos, onVoltar, onEdit, o
       <button onClick={onVoltar} className="flex items-center gap-2 text-emerald-500 font-black text-xs uppercase mb-4"><ArrowLeft size={16}/> Voltar</button>
       <h3 className="text-lg font-black text-white uppercase tracking-widest">{tipo} Detalhado</h3>
       {lista.length === 0 ? <p className="text-xs text-slate-600 italic">Nenhum ativo listado.</p> : lista.map((i, idx) => {
+          // ÍNDICES CORRIGIDOS: Custo=E(4), Mercado=G(6), Lucro Abs=H(7), Prov=L(11), Data=M(12)
           const custoTotal = parseFloat(i.dados[4]) || 0;
           const valorMercado = parseFloat(i.dados[6]) || 0;
           const lucroAbs = parseFloat(i.dados[7]) || 0;
           return (
             <div key={idx} className="p-5 bg-slate-900 border border-slate-800 rounded-3xl">
               <div className="flex justify-between mb-4">
-                <div><p className="font-black text-sm uppercase text-slate-100">{isF ? i.dados[6] : i.dados[0]}</p><p className="text-[9px] font-bold text-slate-500 uppercase">{isF ? `Taxa: ${i.dados[8]}%` : `Qtd: ${i.dados[2]} • PM: R$ ${i.dados[3]}`}</p></div>
+                <div><p className="font-black text-sm uppercase text-slate-100">{isF ? i.dados[6] : i.dados[0]}</p><p className="text-[9px] font-bold text-slate-500 uppercase">{isF ? `Taxa: ${i.dados[8]}%` : `Qtd: ${i.dados[2]} • PM: R$ ${parseFloat(i.dados[3]||0).toFixed(2)}`}</p></div>
                 <div className="flex gap-2">
-                    <button onClick={() => onEdit(i)} className="bg-slate-800 p-3 rounded-xl text-blue-400 active:scale-90 transition-all"><Edit size={20}/></button>
-                    <button onClick={() => onDelete(i.linha, isF ? 'DB_Investimentos_Fixos' : 'DB_Historico_Ordens')} className="bg-slate-800 p-3 rounded-xl text-red-400 active:scale-90 transition-all"><Trash2 size={20}/></button>
+                    <button onClick={() => onEdit(i)} className="bg-slate-800 p-3 rounded-xl text-blue-400 border border-slate-700"><Edit size={22}/></button>
+                    <button onClick={() => onDelete(i.linha, isF ? 'DB_Investimentos_Fixos' : 'DB_Historico_Ordens')} className="bg-slate-800 p-3 rounded-xl text-red-400 border border-slate-700"><Trash2 size={22}/></button>
                 </div>
               </div>
               {!isF && (
@@ -297,7 +296,7 @@ function CarteiraDetalheView({ tipo, ativosVar, ativosFixos, onVoltar, onEdit, o
                   <div><p className="text-[8px] font-black text-slate-500 uppercase">Investido</p><p className="text-xs font-black text-slate-300">R$ {custoTotal.toLocaleString('pt-BR')}</p></div>
                   <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Valor Atual</p><p className="text-xs font-black text-emerald-400">R$ {valorMercado.toLocaleString('pt-BR')}</p></div>
                   <div><p className="text-[8px] font-black text-slate-500 uppercase">Lucro/Prejuízo</p><p className={`text-xs font-black ${lucroAbs >= 0 ? 'text-blue-400' : 'text-red-400'}`}>R$ {lucroAbs.toLocaleString('pt-BR')}</p></div>
-                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Proventos / Data</p><p className="text-xs font-black text-violet-400">R$ {i.dados[11] || '0'} • {i.dados[12] || '--/--'}</p></div>
+                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Proventos / Data</p><p className="text-xs font-black text-violet-400">R$ {parseFloat(i.dados[11]||0).toLocaleString('pt-BR')} • {safeString(i.dados[12]) || '--/--'}</p></div>
                 </div>
               )}
             </div>
@@ -330,7 +329,7 @@ function DevedoresView({ items, onAbrirCliente }) {
       </div>
       {Object.values(c).map((cli, idx) => (
         <div key={idx} onClick={() => onAbrirCliente(cli.n)} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center cursor-pointer active:scale-95 transition-all">
-          <div className="flex gap-4 items-center"><div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center"><Users size={18}/></div><div><p className="text-sm font-black">{cli.n}</p><p className="text-[9px] text-slate-500 uppercase">{cli.a} abertas</p></div></div>
+          <div className="flex gap-4 items-center"><div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center border border-amber-900/20"><Users size={18}/></div><div><p className="text-sm font-black">{cli.n}</p><p className="text-[9px] text-slate-500 uppercase">{cli.a} abertas</p></div></div>
           <p className="text-sm font-black text-amber-400">R$ {cli.e.toLocaleString('pt-BR')}</p>
         </div>
       ))}
@@ -348,7 +347,7 @@ function ClienteDossieView({ nome, items, onVoltar, onStatusChange, onEdit, onDe
         const dO = parseDataBR(i.dados[5]);
         const m = dO ? Math.max(1, (new Date().getFullYear() - dO.getFullYear()) * 12 + (new Date().getMonth() - dO.getMonth())) : 1;
         const total = parseFloat(i.dados[7]) + (parseFloat(i.dados[7]) * (parseFloat(i.dados[10])/100) * m);
-        const isConcluido = i.dados[9] === 'Concluído';
+        const isConcluido = safeString(i.dados[9]) === 'Concluído';
         return (
           <div key={idx} className="p-5 bg-slate-900 border border-slate-800 rounded-[2rem]">
             <div className="flex justify-between mb-4">
