@@ -129,13 +129,12 @@ export default function Dashboard() {
 
   const abrirEdicao = (item, tipoStr) => { setEditItem(item); setModalType(tipoStr); setIsModalOpen(true); };
 
-  // --- CÁLCULO DE CAIXA LIVRE REAL ---
+  // --- CÁLCULO DE CAIXA LIVRE ---
   const calcCaixaLivre = () => {
     let rendaMes = 0; let gastoMes = 0; let investimentoMes = 0; let emprestadoMes = 0; let recebidoMes = 0;
 
     salarios.forEach(s => {
       const d = parseDataBR(s.dados[5]);
-      // Liquido está na Coluna L (dados[11]) conforme a sua imagem
       if (d && d.getMonth() === mesAtual && d.getFullYear() === anoAtual) rendaMes += (parseFloat(s.dados[11]) || 0);
     });
 
@@ -157,8 +156,17 @@ export default function Dashboard() {
     devedores.forEach(dev => {
       const dAcordo = parseDataBR(dev.dados[5]);
       const status = safeString(dev.dados[9]);
-      if (dAcordo && dAcordo.getMonth() === mesAtual && dAcordo.getFullYear() === anoAtual) emprestadoMes += (parseFloat(dev.dados[7]) || 0);
-      if (status === 'Concluído' && dAcordo && dAcordo.getMonth() === mesAtual) recebidoMes += (parseFloat(dev.dados[3]) || 0); 
+      const vOriginal = parseFloat(dev.dados[7]) || 0;
+      const juros = parseFloat(dev.dados[10]) || 0;
+      
+      const hoje = new Date();
+      let meses = dAcordo ? (hoje.getFullYear() - dAcordo.getFullYear()) * 12 + (hoje.getMonth() - dAcordo.getMonth()) : 1;
+      if (dAcordo && hoje.getDate() < dAcordo.getDate()) meses--;
+      meses = Math.max(1, meses);
+      const montante = vOriginal + (vOriginal * (juros/100) * meses);
+
+      if (dAcordo && dAcordo.getMonth() === mesAtual && dAcordo.getFullYear() === anoAtual) emprestadoMes += vOriginal;
+      if (status === 'Concluído') recebidoMes += montante; // Assumimos recebimento integral ao concluir
     });
 
     return { renda: rendaMes + recebidoMes, saida: gastoMes + investimentoMes + emprestadoMes, livre: (rendaMes + recebidoMes) - (gastoMes + investimentoMes + emprestadoMes) };
@@ -222,7 +230,7 @@ function ResumoView({ dadosCaixa, salarios, mes, ano, onEdit, onDelete }) {
         </div>
       </div>
       <h3 className="text-xs font-black text-slate-500 uppercase ml-1">Rendimentos do Mês</h3>
-      {filtrados.map((item, idx) => (
+      {filtrados.length === 0 ? <p className="text-xs text-slate-600 italic">Sem registros de renda neste mês.</p> : filtrados.map((item, idx) => (
         <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center">
           <div className="flex gap-4 items-center"><div className="w-10 h-10 rounded-2xl bg-blue-500/10 text-blue-400 flex items-center justify-center"><Banknote size={18}/></div><div><p className="text-sm font-black">Salário Base</p><p className="text-[9px] text-slate-500 uppercase">{formatDateToBR(parseDataBR(item.dados[5]))}</p></div></div>
           <div className="flex items-center gap-4"><p className="text-sm font-black text-blue-400">R$ {parseFloat(item.dados[11]||0).toLocaleString('pt-BR')}</p><button onClick={() => onEdit(item)} className="text-slate-600"><Edit size={16}/></button></div>
@@ -233,16 +241,25 @@ function ResumoView({ dadosCaixa, salarios, mes, ano, onEdit, onDelete }) {
 }
 
 function CarteiraView({ ativosVar, ativosFixos, onAbrirDetalhe }) {
-  const cCusto = (l) => l.reduce((acc, i) => acc + (parseFloat(i.dados[4]) || 0), 0);
-  const totalVar = cCusto(ativosVar);
+  // Como o app lê da Col F em diante:
+  // Historico: F(Data), G(Ticker), H(Op), I(Qtd), J(Preço) -> Qtd * Preço
+  // Atual: Como não enxergamos a E, teremos que recalcular ou exibir vazio na view macro se não for do historico
+  
+  // Assumindo que você quer ver o Valor de Mercado (Coluna H da aba de Variáveis, que para o App é índice 7, ou a G (6))
+  const cValorMercado = (lista) => lista.reduce((acc, i) => acc + (parseFloat(i.dados[7]) || 0), 0); 
   const totalFixa = ativosFixos.reduce((acc, i) => acc + (parseFloat(i.dados[5]) || 0), 0);
+  
+  const acoes = ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('AÇÃO') || safeString(a.dados[0]).length <= 6); // Filtro ajustado
+  const fiis = ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('FII') || safeString(a.dados[0]).includes('11'));
+
+  const totalGeral = cValorMercado(acoes) + cValorMercado(fiis) + totalFixa;
+
   return (
     <div className="space-y-6">
-      <div className="bg-emerald-900/20 border border-emerald-500/20 p-8 rounded-[2.5rem]"><p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-1">Total Investido</p><p className="text-4xl font-black">R$ {(totalVar + totalFixa).toLocaleString('pt-BR')}</p></div>
+      <div className="bg-emerald-900/20 border border-emerald-500/20 p-8 rounded-[2.5rem]"><p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-1">Total Atual (Mercado)</p><p className="text-4xl font-black">R$ {totalGeral.toLocaleString('pt-BR')}</p></div>
       <div className="grid grid-cols-2 gap-3">
-        <InfoCard title="Ação" val={cCusto(ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('AÇÃO')))} color="text-indigo-400" onClick={() => onAbrirDetalhe('Ação')} />
-        <InfoCard title="FII" val={cCusto(ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('FII')))} color="text-violet-400" onClick={() => onAbrirDetalhe('FII')} />
-        <InfoCard title="Cripto" val={cCusto(ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('CRIPTO')))} color="text-amber-400" onClick={() => onAbrirDetalhe('Cripto')} />
+        <InfoCard title="Ações" val={cValorMercado(acoes)} color="text-indigo-400" onClick={() => onAbrirDetalhe('Ação')} />
+        <InfoCard title="FIIs" val={cValorMercado(fiis)} color="text-violet-400" onClick={() => onAbrirDetalhe('FII')} />
         <InfoCard title="Renda Fixa" val={totalFixa} color="text-emerald-400" onClick={() => onAbrirDetalhe('Renda Fixa')} />
       </div>
     </div>
@@ -251,16 +268,25 @@ function CarteiraView({ ativosVar, ativosFixos, onAbrirDetalhe }) {
 
 function CarteiraDetalheView({ tipo, ativosVar, ativosFixos, onVoltar, onEdit, onDelete }) {
   const isF = tipo === 'Renda Fixa';
-  const lista = isF ? ativosFixos : ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes(tipo.toUpperCase()));
+  // Filtro adaptado para Tickers (Ações geralmente terminam em 3,4. FIIs em 11)
+  const lista = isF ? ativosFixos : ativosVar.filter(a => {
+    if(tipo==='FII') return safeString(a.dados[0]).includes('11');
+    if(tipo==='Ação') return !safeString(a.dados[0]).includes('11');
+    return false;
+  });
+
   return (
     <div className="space-y-4 animate-in slide-in-from-right-8 duration-300">
       <button onClick={onVoltar} className="flex items-center gap-2 text-emerald-500 font-black text-xs uppercase mb-4"><ArrowLeft size={16}/> Voltar</button>
+      <h3 className="text-lg font-black text-white uppercase tracking-widest">{tipo}</h3>
       {lista.map((i, idx) => (
         <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center">
-          <div><p className="font-black text-sm uppercase">{isF ? i.dados[6] : i.dados[0]}</p><p className="text-[9px] text-slate-500">{isF ? `Taxa: ${i.dados[8]}%` : `Qtd: ${i.dados[2]} • PM: R$ ${i.dados[3]}`}</p></div>
+          <div><p className="font-black text-sm uppercase">{isF ? i.dados[6] : i.dados[0]}</p><p className="text-[9px] text-slate-500">{isF ? `Taxa: ${i.dados[8]}%` : `Cotação: R$ ${parseFloat(i.dados[5]||0).toFixed(2)}`}</p></div>
           <div className="flex gap-4 items-center">
-            <div className="text-right"><p className="text-sm font-black text-emerald-400">R$ {parseFloat(isF ? i.dados[7] : i.dados[4]).toLocaleString('pt-BR')}</p></div>
-            <button onClick={() => onEdit(i)} className="text-slate-600"><Edit size={16}/></button>
+            <div className="text-right">
+              <p className="text-sm font-black text-emerald-400">R$ {parseFloat(isF ? i.dados[7] : i.dados[7]||0).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+              {!isF && <p className={`text-[9px] font-black uppercase ${parseFloat(i.dados[8]||0) >= 0 ? 'text-blue-400' : 'text-red-400'}`}>Lucro: R$ {parseFloat(i.dados[8]||0).toFixed(2)}</p>}
+            </div>
           </div>
         </div>
       ))}
@@ -272,22 +298,29 @@ function DevedoresView({ items, onAbrirCliente }) {
   const c = {}; let tE = 0; let tR = 0; let l = 0;
   items.forEach(i => {
     const n = safeString(i.dados[6]) || 'Sem Nome'; if(!c[n]) c[n] = { n, e: 0, p: 0, a: 0 };
-    const emp = parseFloat(i.dados[7])||0; const pag = parseFloat(i.dados[3])||0;
-    c[n].e += emp; c[n].p += pag; if(safeString(i.dados[9]) !== 'Concluído') c[n].a += 1;
-    tE += emp; tR += pag; if(safeString(i.dados[9])==='Concluído') l += (pag - emp);
+    const emp = parseFloat(i.dados[7])||0; const status = safeString(i.dados[9]);
+    const juros = parseFloat(i.dados[10])||0;
+    const dO = parseDataBR(i.dados[5]);
+    const hoje = new Date(); let m = dO ? Math.max(1, (hoje.getFullYear() - dO.getFullYear()) * 12 + (hoje.getMonth() - dO.getMonth())) : 1;
+    const pagIntegral = emp + (emp * (juros/100) * m); // Se concluiu, pagou tudo
+
+    c[n].e += emp; 
+    if(status === 'Concluído') { c[n].p += pagIntegral; tR += pagIntegral; l += (pagIntegral - emp); } 
+    else { c[n].a += 1; }
+    tE += emp; 
   });
   return (
     <div className="space-y-4">
-      <div className="bg-amber-600/10 border border-amber-500/20 p-8 rounded-[2.5rem]"><p className="text-[10px] font-black text-amber-500 uppercase mb-1">Total na Rua</p><p className="text-4xl font-black">R$ {tE.toLocaleString('pt-BR')}</p>
+      <div className="bg-amber-600/10 border border-amber-500/20 p-8 rounded-[2.5rem]"><p className="text-[10px] font-black text-amber-500 uppercase mb-1">Total na Rua (Principal)</p><p className="text-4xl font-black">R$ {tE.toLocaleString('pt-BR')}</p>
         <div className="grid grid-cols-2 gap-4 mt-6 pt-6 border-t border-amber-500/20">
-          <div><p className="text-[9px] font-black text-slate-500 uppercase">Recebido</p><p className="text-lg font-black text-emerald-400">R$ {tR.toLocaleString('pt-BR')}</p></div>
-          <div><p className="text-[9px] font-black text-slate-500 uppercase">Lucro</p><p className="text-lg font-black text-blue-400">R$ {l.toLocaleString('pt-BR')}</p></div>
+          <div><p className="text-[9px] font-black text-slate-500 uppercase">Recebido c/ Juros</p><p className="text-lg font-black text-emerald-400">R$ {tR.toLocaleString('pt-BR')}</p></div>
+          <div><p className="text-[9px] font-black text-slate-500 uppercase">Lucro</p><p className={`text-lg font-black ${l >= 0 ? 'text-blue-400' : 'text-red-400'}`}>R$ {l.toLocaleString('pt-BR')}</p></div>
         </div>
       </div>
       {Object.values(c).map((cli, idx) => (
         <div key={idx} onClick={() => onAbrirCliente(cli.n)} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center cursor-pointer active:scale-95 transition-all">
           <div className="flex gap-4 items-center"><div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center border border-amber-900/20"><Users size={18}/></div><div><p className="text-sm font-black">{cli.n}</p><p className="text-[9px] text-slate-500 uppercase">{cli.a} abertas</p></div></div>
-          <p className="text-sm font-black text-amber-400">R$ {(cli.e - cli.p).toLocaleString('pt-BR')}</p>
+          <p className="text-sm font-black text-amber-400">R$ {(cli.e).toLocaleString('pt-BR')}</p>
         </div>
       ))}
     </div>
@@ -306,7 +339,7 @@ function ClienteDossieView({ nome, items, onVoltar, onStatusChange, onEdit, onDe
         return (
           <div key={idx} className="p-5 bg-slate-900 border border-amber-900/30 rounded-[2rem]">
             <div className="flex justify-between mb-4"><span className="text-[9px] font-black uppercase bg-amber-900/50 text-amber-400 px-2 py-1 rounded-lg">{i.dados[9]}</span><div className="flex gap-2"><button onClick={() => onEdit(i)} className="text-slate-600"><Edit size={16}/></button><button onClick={() => onStatusChange(i, i.dados[9]==='Concluído'?'Pendente':'Concluído')} className="text-emerald-500"><CheckCircle size={16}/></button></div></div>
-            <div className="flex justify-between items-end border-t border-slate-800 pt-3"><div className="text-[10px] text-slate-400 uppercase font-bold">Principal: R$ {vO}<br/>Juros: {j}%</div><p className="text-lg font-black text-amber-400">R$ {(vO + (vO*(j/100)*m)).toLocaleString('pt-BR')}</p></div>
+            <div className="flex justify-between items-end border-t border-slate-800 pt-3"><div className="text-[10px] text-slate-400 uppercase font-bold">Principal: R$ {vO}<br/>Juros: {j}% a.m</div><p className="text-lg font-black text-amber-400">R$ {(vO + (vO*(j/100)*m)).toLocaleString('pt-BR')}</p></div>
           </div>
         );
       })}
@@ -315,9 +348,11 @@ function ClienteDossieView({ nome, items, onVoltar, onStatusChange, onEdit, onDe
 }
 
 function CartoesView({ items, config, onPagar, onEdit, onDelete }) {
+  // Removi o filtro de mês para listar todas as faturas pendentes ou pagas
   return (
     <div className="space-y-4">
-      {items.map((i, idx) => (
+      <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest ml-1 mb-4">Lançamentos (Todos os Meses)</h3>
+      {items.length === 0 ? <p className="text-xs text-slate-600 italic">Sem registros de cartão.</p> : items.map((i, idx) => (
         <div key={idx} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center">
           <div className="flex gap-4 items-center"><div className="w-10 h-10 rounded-2xl border border-indigo-500/20 flex items-center justify-center text-indigo-400"><CreditCard size={18}/></div><div><p className="text-sm font-black">{i.dados[8]}</p><p className="text-[9px] text-slate-500 uppercase">{i.dados[10]} • {i.dados[11]}</p></div></div>
           <div className="flex items-center gap-4"><p className="text-sm font-black">R$ {parseFloat(i.dados[7]||0).toLocaleString('pt-BR')}</p><button onClick={() => onEdit(i)} className="text-slate-600"><Edit size={16}/></button></div>
@@ -335,7 +370,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
       const d = editItem.dados; const toInp = (s) => parseDataBR(s) ? parseDataBR(s).toISOString().split('T')[0] : '';
       if (tipo === 'devedor') setFormData(p => ({...p, data: toInp(d[5]), nome: d[6], valor: d[7], dataVenc: toInp(d[8]), juros: d[10]}));
       else if (tipo === 'cartao') setFormData(p => ({...p, data: toInp(d[5]), isFixo: safeString(d[6]).toUpperCase()==='FIXO', valor: d[7], nome: d[8], categoria: d[9], banco: d[10]}));
-      else if (tipo === 'salario') setFormData(p => ({...p, data: toInp(d[5]), valor: d[6], he50: d[7], he100: d[8], descontos: d[10]})); // Descontos na coluna K (índice 10)
+      else if (tipo === 'salario') setFormData(p => ({...p, data: toInp(d[5]), valor: d[6], he50: d[7], he100: d[8], descontos: d[10]})); 
       else if (tipo === 'ativo') setFormData(p => ({...p, data: toInp(d[5]), nome: d[6] || d[0], valor: d[7] || d[2], juros: d[8] || d[3], ativoTipo: d[9] || 'Ação'}));
     }
   }, [editItem, tipo]);
@@ -372,7 +407,6 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
               aba = 'bdRendas'; const b = parseFloat(formData.valor)||0; const h5 = parseFloat(formData.he50)||0; const h1 = parseFloat(formData.he100)||0; const dsr = parseFloat(formData.dsr)||0; const adN = parseFloat(formData.adNoturno)||0; const out = parseFloat(formData.outros)||0; const d = parseFloat(formData.descontos)||0;
               const extAg = dsr + adN + out; const liq = b + h5 + h1 + extAg - d;
               pObj = { "Data": dBR, "Salario Base": b, "HE 50%": h5, "HE 100%": h1, "Adicionais (DSR/Noturno/Outros)": extAg, "Descontos": d, "Liquido": liq };
-              // EXATAMENTE 7 ITENS PARA BATER COM A TRAVA DO API.GS (F a L)
               pArr = [dBR, b, h5, h1, extAg, d, liq];
             }
             onSave(editItem ? pArr : pObj, aba, editItem?.linha);
@@ -389,6 +423,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
                 <input type="text" placeholder="Descrição" value={formData.nome} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required />
                 <div className="grid grid-cols-2 gap-4"><input type="number" step="any" placeholder="Valor" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><input type="text" placeholder="Categoria" value={formData.categoria} className={inputClass} onChange={e => setFormData({...formData, categoria: e.target.value})} required /></div>
                 <div className="relative"><select className={`${inputClass} appearance-none`} value={formData.banco} onChange={e => setFormData({...formData, banco: e.target.value})}>{meusBancos.map((b, i) => <option key={i} value={b}>{b}</option>)}</select><ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" size={16}/></div>
+                <label className="flex items-center gap-3 p-4 bg-slate-900 border border-slate-800 rounded-2xl cursor-pointer"><input type="checkbox" checked={formData.isFixo} className="w-5 h-5 accent-emerald-500 rounded-lg bg-slate-800 border-slate-700" onChange={e => setFormData({...formData, isFixo: e.target.checked})} /><span className="text-sm font-bold text-slate-300">É uma despesa Fixa?</span></label>
               </>
             ) : tipo === 'devedor' ? (
               <><input type="text" placeholder="Cliente" value={formData.nome} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value})} required /><div className="grid grid-cols-2 gap-4"><input type="number" step="any" placeholder="Valor" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><input type="number" step="any" placeholder="Juros %" value={formData.juros} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required /></div><input type="date" value={formData.dataVenc} className={inputClass} onChange={e => setFormData({...formData, dataVenc: e.target.value})} /></>
