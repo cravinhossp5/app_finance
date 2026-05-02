@@ -12,7 +12,7 @@ export default function Dashboard() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalType, setModalType] = useState(''); 
   const [isLoading, setIsLoading] = useState(true);
-  const [syncStatus, setSyncStatus] = useState('synced'); // 'synced', 'syncing', 'error'
+  const [syncStatus, setSyncStatus] = useState('synced'); 
   const [notification, setNotification] = useState(null);
 
   const meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
@@ -23,7 +23,6 @@ export default function Dashboard() {
   const [gastosCartao, setGastosCartao] = useState([]);
   const [devedores, setDevedores] = useState([]);
 
-  // Notificações internas do App
   const showToast = (message, type = 'success') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 4000);
@@ -62,11 +61,10 @@ export default function Dashboard() {
 
   useEffect(() => { fetchDados(); }, []);
 
-  // Lógica Otimista: Salva em segundo plano e libera a tela
   const handleSalvar = async (payload, aba) => {
     setIsModalOpen(false); 
     setSyncStatus('syncing');
-    showToast("Enviando para a planilha...");
+    showToast("Enviando para a planilha...", "info");
 
     try {
       const response = await fetch('/api/proxy', {
@@ -81,23 +79,26 @@ export default function Dashboard() {
         showToast("Dados registrados com sucesso!");
         fetchDados(true); 
       } else {
-        throw new Error();
+        throw new Error(result.error || result.message || "Erro desconhecido");
       }
     } catch (error) {
       setSyncStatus('error');
-      showToast("Falha ao salvar. Verifique o Proxy.", "error");
+      showToast(`Falha: ${error.message}`, "error");
     }
   };
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50 pb-24 font-sans relative overflow-x-hidden">
       
-      {/* POPUP DE NOTIFICAÇÃO (TOAST) ESTILIZADO */}
       {notification && (
         <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-[200] px-6 py-4 rounded-[1.5rem] shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-top-4 duration-500 border w-[90%] max-w-sm ${
-          notification.type === 'success' ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-400' : 'bg-red-950/90 border-red-500/50 text-red-400'
+          notification.type === 'success' ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-400' : 
+          notification.type === 'info' ? 'bg-blue-950/90 border-blue-500/50 text-blue-400' :
+          'bg-red-950/90 border-red-500/50 text-red-400'
         }`}>
-          {notification.type === 'success' ? <CheckCircle size={20}/> : <AlertCircle size={20}/>}
+          {notification.type === 'success' ? <CheckCircle size={20}/> : 
+           notification.type === 'info' ? <Loader2 size={20} className="animate-spin"/> :
+           <AlertCircle size={20}/>}
           <span className="font-bold text-sm">{notification.message}</span>
         </div>
       )}
@@ -146,7 +147,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave }) {
           <h3 className="font-black text-xl text-emerald-500">
             {tipo === 'escolha' ? 'O que lançar?' : 'Dados do Registro'}
           </h3>
-          <button onClick={onClose} className="p-2 bg-slate-800 rounded-full text-slate-500"><X size={20}/></button>
+          <button onClick={onClose} className="p-2 bg-slate-800 rounded-full text-slate-500 hover:text-white"><X size={20}/></button>
         </div>
 
         {tipo === 'escolha' ? (
@@ -165,38 +166,39 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave }) {
             if (tipo === 'devedor') {
               abaDestino = 'bdDevedores';
               payload = {
-                // ATENÇÃO: As chaves em vermelho ("Nome", "Valor Inicial"...) 
-                // DEVEM ser 100% idênticas ao cabeçalho da sua planilha (F a L)
-                "Nome": formData.nome,
-                "Valor Inicial": parseFloat(formData.valor) || 0,
-                "Juros %": parseFloat(formData.juros) || 0,
-                "Data": formData.data
+                // EXATAMENTE IGUAL AOS CABEÇALHOS DA IMAGEM
+                "Data Acordo": formData.data,
+                "Nome Devedor": formData.nome,
+                "Valor Total": parseFloat(formData.valor) || 0,
+                "Observações": `Juros: ${formData.juros}% ao mês`
               };
             } else if (tipo === 'cartao') {
               abaDestino = 'bdLancamentos';
               payload = {
+                // CONFIRME SE ESTES SÃO OS NOMES DE F A L EM BDLANCAMENTOS
                 "Categoria": formData.categoria,
                 "Conta/Cartão": formData.banco,
                 "Valor": parseFloat(formData.valor) || 0,
                 "Data": formData.data
               };
             } else if (tipo === 'ativo') {
-              abaDestino = 'DB_Historico_Ordens'; // Corrigido o destino!
+              abaDestino = 'DB_Historico_Ordens';
               payload = {
+                // ESTES DADOS SÓ SERÃO LIDOS SE VOCÊ MOVER ELES PARA F-L NA PLANILHA
+                "Data": formData.data,
                 "Ticker": formData.ticker?.toUpperCase(),
-                "Tipo": "Ação", // Ajuste o nome dessa coluna se for diferente no histórico
+                "Tipo_Operacao": "COMPRA",
                 "Quantidade": parseFloat(formData.valor) || 0,
-                "Preco": parseFloat(formData.juros) || 0,
-                "Data": formData.data
+                "Preco_Unitario": parseFloat(formData.juros) || 0
               };
             }
 
             onSave(payload, abaDestino);
           }}>
-            <input type="text" placeholder={tipo === 'devedor' ? "Quem deve?" : "Ticker ou Item"} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value, ticker: e.target.value})} required />
+            <input type="text" placeholder={tipo === 'devedor' ? "Quem deve?" : "Ticker ou Categoria"} className={inputClass} onChange={e => setFormData({...formData, nome: e.target.value, ticker: e.target.value, categoria: e.target.value})} required />
             <div className="grid grid-cols-2 gap-4">
               <input type="number" step="any" placeholder={tipo === 'ativo' ? "Quantidade" : "Valor R$"} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
-              <input type="text" placeholder={tipo === 'devedor' ? "Juros %" : tipo === 'ativo' ? "Preço Médio" : "Categoria"} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value, categoria: e.target.value})} required />
+              <input type="text" placeholder={tipo === 'devedor' ? "Juros %" : tipo === 'ativo' ? "Preço Médio" : "Cartão/Conta"} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value, banco: e.target.value})} required />
             </div>
             <input type="date" value={formData.data} className={inputClass} onChange={e => setFormData({...formData, data: e.target.value})} />
             <button type="submit" className="w-full bg-emerald-600 text-white py-5 rounded-2xl font-black shadow-lg shadow-emerald-900/30 active:scale-95 transition-all mt-4">
