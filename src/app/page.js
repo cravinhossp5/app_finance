@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 
 // ==========================================
-// TRADUTOR FINANCEIRO E CÁLCULO PRECISO
+// TRADUTOR FINANCEIRO E CÁLCULO BANCÁRIO
 // ==========================================
 const safeString = (val) => String(val || '').trim();
 
@@ -44,23 +44,43 @@ function formatDateToBR(dateObj) {
   return `${String(dateObj.getDate()).padStart(2, '0')}/${String(dateObj.getMonth() + 1).padStart(2, '0')}/${dateObj.getFullYear()}`;
 }
 
+// MOTOR DE JUROS COMPOSTOS (Simulador de CDI com IR)
 const calcFixa = (vA, taxInput, dataApp) => {
-  if (!vA || !dataApp) return vA || 0;
-  const h = new Date();
-  const diffTime = Math.abs(h - dataApp);
-  const days = Math.floor(diffTime / (1000 * 60 * 60 * 24)); // Dias exatos
+  if (!vA || !dataApp) return { bruto: vA || 0, liquido: vA || 0, ir: 0, lucro: 0 };
+  
+  const hoje = new Date();
+  const diffTime = Math.max(0, hoje - dataApp);
+  const diasCorridos = Math.floor(diffTime / (1000 * 60 * 60 * 24));
   
   let dailyRate;
   if (taxInput > 20) { 
-     // Se maior que 20, assume que é % do CDI (Ex: 105.5)
-     const cdiAnual = 0.105; // Selic Meta ~10.5%
+     // Calculo CDI Base 252 (Aproximando CDI médio do último ano em ~11.15%)
+     const cdiAnual = 0.1115; 
      const taxEfetivaAnual = cdiAnual * (taxInput / 100);
-     dailyRate = Math.pow(1 + taxEfetivaAnual, 1/365) - 1;
+     dailyRate = Math.pow(1 + taxEfetivaAnual, 1/252) - 1;
   } else { 
-     // Assume que é % ao mês (Ex: 1.5)
      dailyRate = Math.pow(1 + (taxInput / 100), 1/30) - 1;
   }
-  return vA * Math.pow(1 + dailyRate, days);
+  
+  // Aproximação de dias úteis
+  const diasUteis = taxInput > 20 ? (diasCorridos * (252/365)) : diasCorridos;
+  
+  const montanteBruto = vA * Math.pow(1 + dailyRate, diasUteis);
+  const lucroBruto = montanteBruto - vA;
+  
+  // Tabela Regressiva IR
+  let irRate = 0;
+  if (taxInput > 20) { 
+     if (diasCorridos <= 180) irRate = 0.225;
+     else if (diasCorridos <= 360) irRate = 0.20;
+     else if (diasCorridos <= 720) irRate = 0.175;
+     else irRate = 0.15;
+  }
+  
+  const descontoIR = lucroBruto * irRate;
+  const montanteLiquido = montanteBruto - descontoIR;
+  
+  return { bruto: montanteBruto, liquido: montanteLiquido, ir: descontoIR, lucro: lucroBruto };
 };
 
 export default function Dashboard() {
@@ -224,7 +244,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* MODAL DE CONFIRMAÇÃO E ROLAGEM CUSTOMIZADO */}
       {customDialog && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[300] flex justify-center items-center p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-[2.5rem] p-6 w-full max-w-sm shadow-2xl animate-in zoom-in-95">
@@ -283,7 +302,7 @@ export default function Dashboard() {
 }
 
 // ==========================================
-// VIEWS DE INTERFACE (COMPONENTES)
+// VIEWS DE INTERFACE
 // ==========================================
 
 function ResumoView({ dadosCaixa, salarios, mes, ano, onEdit, onDelete }) {
@@ -315,34 +334,27 @@ function ResumoView({ dadosCaixa, salarios, mes, ano, onEdit, onDelete }) {
 }
 
 function CarteiraView({ ativosVar, hist, ativosFixos, onAbrirDetalhe }) {
-  // O Mapeamento exato da Aba DB_Investimentos_Variaveis: Ticker = 0, Tipo = 1
-  const getAtivos = (tipo) => {
-    let list = ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes(tipo.toUpperCase()));
-    
-    // Resgate do Histórico caso não tenha cadastrado na aba Variaveis ainda
-    const existingTickers = list.map(a => safeString(a.dados[0]).toUpperCase());
-    const histList = hist.filter(h => safeString(h.dados[10]).toUpperCase().includes(tipo.toUpperCase()) && !existingTickers.includes(safeString(h.dados[6]).toUpperCase()));
-    
-    const mappedHist = histList.map(h => {
-        const qtd = parseCurrency(h.dados[8]); const pm = parseCurrency(h.dados[9]); const custo = qtd * pm;
-        const r = []; r[0]=h.dados[6]; r[1]=h.dados[10]; r[2]=qtd; r[3]=pm; r[4]=custo; r[5]=pm; r[6]=custo; r[7]=0; r[11]=0; r[12]="";
-        return { linha: h.linha, dados: r, isHist: true };
-    });
-    return [...list, ...mappedHist];
-  };
-
-  const acoes = getAtivos('AÇÃO');
-  const fiis = getAtivos('FII');
-  const cripto = getAtivos('CRIPTO');
-
-  // Cotação/Mercado está no Índice 6
-  const cValorMercado = (lista) => lista.reduce((acc, i) => acc + parseCurrency(i.dados[6]), 0); 
+  // ÍNDICE 1 É A COLUNA 'B' ONDE FICA O TIPO NA PLANILHA
+  const acoes = ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('AÇÃO'));
+  const fiis = ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('FII'));
   
-  // Proventos estão no Índice 11
+  // Resgate de Cripto: Se não achar na variável, caça no histórico
+  let cripto = ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('CRIPTO'));
+  const criptoHist = hist.filter(h => safeString(h.dados[10]).toUpperCase().includes('CRIPTO')).map(h => {
+      const qtd = parseCurrency(h.dados[8]); const pm = parseCurrency(h.dados[9]); const custo = qtd * pm;
+      const r = []; r[0]=h.dados[6]; r[1]=h.dados[10]; r[2]=qtd; r[3]=pm; r[4]=custo; r[5]=pm; r[6]=custo; r[7]=0; r[11]=0; r[12]="";
+      return { linha: h.linha, dados: r, isHist: true };
+  });
+  if (cripto.length === 0) cripto = criptoHist;
+
+  const cValorMercado = (lista) => lista.reduce((acc, i) => acc + parseCurrency(i.dados[6]), 0); 
   const provAcoes = acoes.reduce((acc, i) => acc + parseCurrency(i.dados[11]), 0); 
   const provFIIs = fiis.reduce((acc, i) => acc + parseCurrency(i.dados[11]), 0);
   
-  const totalFixa = ativosFixos.reduce((acc, i) => acc + calcFixa(parseCurrency(i.dados[7]), parseCurrency(i.dados[8]), parseDataBR(i.dados[5])), 0);
+  const totalFixa = ativosFixos.reduce((acc, i) => {
+    const rf = calcFixa(parseCurrency(i.dados[8]), parseCurrency(i.dados[9]), parseDataBR(i.dados[5]));
+    return acc + rf.liquido;
+  }, 0);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -401,24 +413,31 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, onVoltar, onE
 
       {lista.length === 0 ? <p className="text-xs text-slate-600 italic">Nenhum ativo listado.</p> : lista.map((i, idx) => {
           if(isF) {
-            const dataApp = parseDataBR(i.dados[5]); const vA = parseCurrency(i.dados[7]); const taxa = parseCurrency(i.dados[8]);
-            const montante = calcFixa(vA, taxa, dataApp); const lucro = montante - vA;
+            // MATEMÁTICA REAL DE CDB
+            const dataApp = parseDataBR(i.dados[5]); const dataVenc = parseDataBR(i.dados[6]);
+            const vA = parseCurrency(i.dados[8]); const taxa = parseCurrency(i.dados[9]);
+            const calc = calcFixa(vA, taxa, dataApp);
+            
             return (
               <div key={idx} className="p-5 bg-slate-900 border border-slate-800 rounded-[2rem]">
                 <div className="flex justify-between items-start mb-4">
-                  <div><p className="font-black text-lg uppercase text-slate-100">{i.dados[6]}</p><p className="text-[10px] font-bold text-slate-500 uppercase">{i.dados[9]} • Taxa: {i.dados[8]} {taxa > 20 ? '% CDI' : '% a.m'}</p></div>
+                  <div><p className="font-black text-lg uppercase text-slate-100">{i.dados[7]}</p><p className="text-[10px] font-bold text-slate-500 uppercase">{i.dados[10]} • Taxa: {i.dados[9]} {taxa > 20 ? '% CDI' : '% a.m'}</p></div>
                   <div className="flex gap-2"><button onClick={() => onEdit(i)} className="bg-slate-800 p-3 rounded-xl text-blue-400 active:scale-90"><Edit size={20}/></button><button onClick={() => onDelete(i.linha, 'DB_Investimentos_Fixos')} className="bg-slate-800 p-3 rounded-xl text-red-400 active:scale-90"><Trash2 size={20}/></button></div>
                 </div>
-                <div className="grid grid-cols-3 gap-4 border-t border-slate-800 pt-4 mt-2">
-                  <div><p className="text-[8px] font-black text-slate-500 uppercase">Aplicado</p><p className="text-sm font-black text-slate-300">R$ {vA.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-                  <div className="text-center"><p className="text-[8px] font-black text-slate-500 uppercase">Juros Compostos</p><p className={`text-sm font-black ${lucro > 0 ? 'text-blue-400' : 'text-slate-500'}`}>+R$ {lucro.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
-                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Total (Com Juros)</p><p className="text-sm font-black text-emerald-400">R$ {montante.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+                <div className="grid grid-cols-2 gap-4 border-t border-slate-800 pt-4 mt-2">
+                  <div><p className="text-[8px] font-black text-slate-500 uppercase">Aplicado em {formatDateToBR(dataApp)}</p><p className="text-sm font-black text-slate-300">R$ {vA.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Juros (Bruto)</p><p className="text-sm font-black text-blue-400">+R$ {calc.lucro.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+                  <div><p className="text-[8px] font-black text-slate-500 uppercase">Imposto de Renda Retido</p><p className="text-sm font-black text-red-400">-R$ {calc.ir.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Líquido Disponível</p><p className="text-sm font-black text-emerald-400">R$ {calc.liquido.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
+                  {dataVenc && (
+                    <div className="col-span-2 pt-2 border-t border-slate-800/50 mt-2"><p className="text-[8px] font-black text-slate-500 uppercase">Data de Vencimento</p><p className="text-xs font-black text-amber-500">{formatDateToBR(dataVenc)}</p></div>
+                  )}
                 </div>
               </div>
             )
           }
 
-          // ÍNDICES BASEADOS NO PRINT DB_Investimentos_Variaveis
+          // VARIÁVEL (Ações, FII, Cripto)
           const ticker = i.dados[0]; const qtd = parseCurrency(i.dados[2]); const precoMedio = parseCurrency(i.dados[3]); 
           const custoTotal = parseCurrency(i.dados[4]); const valorMercado = parseCurrency(i.dados[6]); 
           const lucroAbs = parseCurrency(i.dados[7]); const provento = parseCurrency(i.dados[11]); const dataProv = safeString(i.dados[12]); 
@@ -434,7 +453,7 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, onVoltar, onE
                 <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Valor Atual (Mercado)</p><p className="text-sm font-black text-emerald-400">R$ {valorMercado.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
                 <div><p className="text-[8px] font-black text-slate-500 uppercase">{tipo === 'Cripto' ? 'Valorização' : 'Lucro Absoluto'}</p><p className={`text-sm font-black ${lucroAbs >= 0 ? 'text-blue-400' : 'text-red-400'}`}>R$ {lucroAbs.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
                 {tipo !== 'Cripto' && (
-                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Proventos / Data</p><p className="text-sm font-black text-violet-400">R$ {provento.toLocaleString('pt-BR', {minimumFractionDigits:2})} • {dataProv || '--/--'}</p></div>
+                  <div className="text-right"><p className="text-[8px] font-black text-slate-500 uppercase">Proventos Previstos</p><p className="text-sm font-black text-violet-400">R$ {provento.toLocaleString('pt-BR', {minimumFractionDigits:2})} • {dataProv || '--/--'}</p></div>
                 )}
               </div>
             </div>
@@ -447,14 +466,16 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, onVoltar, onE
 function DevedoresView({ items, onAbrirCliente }) {
   const c = {}; let tE = 0; let tR = 0; let luc = 0;
   items.forEach(i => {
-    const n = safeString(i.dados[6]) || 'Sem Nome'; if(!c[n]) c[n] = { n, e: 0, p: 0, a: 0 };
+    const n = safeString(i.dados[6]) || 'Sem Nome'; if(!c[n]) c[n] = { n, e: 0, p: 0, a: 0, tot: 0 };
     const emp = parseCurrency(i.dados[7]); const status = safeString(i.dados[9]); const j = parseCurrency(i.dados[10]); const dO = parseDataBR(i.dados[5]);
     const hoje = new Date(); let m = 0;
     if(dO) { m = (hoje.getFullYear() - dO.getFullYear()) * 12 + (hoje.getMonth() - dO.getMonth()); if (hoje.getDate() < dO.getDate()) m--; m = Math.max(0, m); }
     const montante = emp + (emp * (j/100) * m);
     
+    // Todos entram na lista individual, mas o "Total Pendente" lá no topo só conta os não concluídos
     if(status !== 'Concluído') { c[n].e += emp; c[n].a += 1; tE += emp; } 
     if(status === 'Concluído') { c[n].p += montante; tR += montante; luc += (montante - emp); } 
+    c[n].tot += 1; // Contador para renderizar todos os clientes
   });
   return (
     <div className="space-y-4 animate-in fade-in duration-300">
@@ -466,7 +487,8 @@ function DevedoresView({ items, onAbrirCliente }) {
           <div><p className="text-[9px] text-slate-500 uppercase font-black">Lucro Realizado</p><p className={`text-lg font-black ${luc >= 0 ? 'text-blue-400' : 'text-red-400'}`}>R$ {luc.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p></div>
         </div>
       </div>
-      {Object.values(c).filter(cli => cli.a > 0).map((cli, idx) => (
+      {/* Removido o filtro de a > 0, agora mostra todos os clientes que têm histórico */}
+      {Object.values(c).map((cli, idx) => (
         <div key={idx} onClick={() => onAbrirCliente(cli.n)} className="p-4 bg-slate-900 border border-slate-800 rounded-3xl flex justify-between items-center cursor-pointer active:scale-95 transition-all">
           <div className="flex gap-4 items-center"><div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center border border-amber-900/20"><Users size={20}/></div><div><p className="text-sm font-black">{cli.n}</p><p className="text-[9px] text-slate-500 uppercase">{cli.a} cobranças ativas</p></div></div>
           <p className="text-sm font-black text-amber-400">R$ {cli.e.toLocaleString('pt-BR', {minimumFractionDigits:2})}</p>
@@ -538,7 +560,7 @@ function RolagemModal({ item, totalAtual, onClose, onSave }) {
       <input type="date" value={dataNova} onChange={e => setDataNova(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-2xl p-4 text-white mb-6 font-bold" />
       <div className="flex flex-col gap-3">
         <button onClick={() => executar('juros')} className="w-full p-4 rounded-2xl bg-emerald-900/30 border border-emerald-500/50 text-emerald-400 font-bold uppercase text-[10px] tracking-widest active:scale-95 flex flex-col items-center">
-          <span className="text-xs">Receber R$ {jurosAcumulados.toFixed(2)} de Juros</span><span className="text-[8px] opacity-70 mt-1">(Gera lucro no Caixa e mantém principal)</span>
+          <span className="text-xs">Receber R$ {jurosAcumulados.toFixed(2)} de Juros</span><span className="text-[8px] opacity-70 mt-1">(Gera lucro no Caixa e mantém principal R$ {vO})</span>
         </button>
         <button onClick={() => executar('capitalizar')} className="w-full p-4 rounded-2xl bg-amber-900/30 border border-amber-500/50 text-amber-500 font-bold uppercase text-[10px] tracking-widest active:scale-95 flex flex-col items-center">
           <span className="text-xs">Capitalizar Tudo para R$ {totalAtual.toFixed(2)}</span><span className="text-[8px] opacity-70 mt-1">(O Juros vira Dívida Principal)</span>
@@ -595,7 +617,8 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
       else if (tipo === 'salario') setFormData(p => ({...p, data: toInp(d[5]), valor: parseCurrency(d[6]), he50: parseCurrency(d[7]), he100: parseCurrency(d[8]), descontos: parseCurrency(d[10])})); 
       else if (tipo === 'ativo') {
          const isFixa = d[9] ? safeString(d[9]).includes('CDB') || safeString(d[9]).includes('CDI') || safeString(d[9]).includes('Tesouro') : false;
-         setFormData(p => ({...p, data: toInp(d[5]), nome: d[6] || d[0], valor: parseCurrency(d[7] || d[2]), juros: parseCurrency(d[8] || d[3]), ativoTipo: isFixa ? 'Renda Fixa' : (d[9] || 'Ação'), subTipo: d[9] || 'CDB'}));
+         // Para edição de Fixa, repuxa os dados corretos:
+         setFormData(p => ({...p, data: toInp(d[5]), dataVenc: toInp(d[6]), nome: d[7] || d[0], valor: parseCurrency(d[8] || d[2]), juros: parseCurrency(d[9] || d[3]), ativoTipo: isFixa ? 'Renda Fixa' : (d[9] || 'Ação'), subTipo: d[10] || 'CDB'}));
       }
     }
   }, [editItem, tipo]);
@@ -605,7 +628,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
   return (
     <div className="fixed inset-0 bg-black/95 backdrop-blur-md z-[100] flex items-end md:items-center justify-center p-4">
       <div className="bg-slate-900 w-full max-w-md rounded-[3rem] border border-slate-800 p-8 shadow-2xl overflow-y-auto max-h-[90vh]">
-        <div className="flex justify-between items-center mb-8"><h3 className="font-black text-xl text-emerald-500">{editItem ? `Editar ${tipo}` : 'Novo'}</h3><button onClick={onClose} className="p-3 bg-slate-800 rounded-full text-slate-500"><X size={24}/></button></div>
+        <div className="flex justify-between items-center mb-8"><h3 className="font-black text-xl text-emerald-500">{editItem ? `Editar ${tipo}` : 'Novo Lançamento'}</h3><button onClick={onClose} className="p-3 bg-slate-800 rounded-full text-slate-500"><X size={24}/></button></div>
         {tipo === 'escolha' ? (
           <div className="grid grid-cols-2 gap-3"><ChoiceBtn onClick={() => setTipo('salario')} icon={<Banknote size={32} className="text-blue-400"/>} label="Salário" /><ChoiceBtn onClick={() => setTipo('cartao')} icon={<CreditCard size={32} className="text-indigo-400"/>} label="Gastos" /><ChoiceBtn onClick={() => setTipo('ativo')} icon={<Wallet size={32} className="text-emerald-400"/>} label="Ativos" /><ChoiceBtn onClick={() => setTipo('devedor')} icon={<Users size={32} className="text-amber-400"/>} label="Devedor" /></div>
         ) : (
@@ -615,7 +638,7 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
             if (tipo === 'devedor') { aba = 'bdDevedores'; p = [dBR, formData.nome, parseCurrency(formData.valor), vBR, editItem?.dados[9]||"Pendente", parseCurrency(formData.juros), "App"]; }
             else if (tipo === 'cartao') { aba = 'bdLancamentos'; p = [dBR, formData.isFixo?"Fixo":"Avulso", parseCurrency(formData.valor), formData.nome, formData.categoria, formData.banco, editItem?.dados[11]||"Pendente"]; }
             else if (tipo === 'ativo') { 
-              if (formData.ativoTipo === 'Renda Fixa') { aba = 'DB_Investimentos_Fixos'; p = [dBR, formData.nome, parseCurrency(formData.valor), parseCurrency(formData.juros), formData.subTipo, "", ""]; }
+              if (formData.ativoTipo === 'Renda Fixa') { aba = 'DB_Investimentos_Fixos'; p = [dBR, vBR, formData.nome, parseCurrency(formData.valor), parseCurrency(formData.juros), formData.subTipo]; }
               else { aba = 'DB_Historico_Ordens'; p = [dBR, formData.nome.toUpperCase(), "COMPRA", parseCurrency(formData.valor), parseCurrency(formData.juros), formData.ativoTipo, ""]; }
             } else if (tipo === 'salario') {
               aba = 'bdRendas'; const b = parseCurrency(formData.valor); const h5 = parseCurrency(formData.he50); const h1 = parseCurrency(formData.he100); const dsr = parseCurrency(formData.dsr); const adN = parseCurrency(formData.adNoturno); const out = parseCurrency(formData.outros); const d = parseCurrency(formData.descontos);
@@ -645,6 +668,10 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos, editItem 
                 )}
                 <input type="text" placeholder={formData.ativoTipo==='Renda Fixa' ? "Nome (ex: CDB Inter)" : "Ticker"} value={formData.nome} className={`${inputClass} uppercase`} onChange={e => setFormData({...formData, nome: e.target.value})} required />
                 <div className="grid grid-cols-2 gap-4"><input type="number" step="any" placeholder={formData.ativoTipo==='Renda Fixa'?"Valor Aplicado":"Qtd/Aporte"} value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required /><input type="number" step="any" placeholder={formData.ativoTipo==='Renda Fixa'?"Taxa Acordada %":"Preço / Custo"} value={formData.juros} className={inputClass} onChange={e => setFormData({...formData, juros: e.target.value})} required /></div>
+                
+                {formData.ativoTipo === 'Renda Fixa' && (
+                  <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800"><span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Data de Vencimento</span><input type="date" value={formData.dataVenc} className={`${inputClass} !bg-slate-900 border-none !p-2 text-amber-500`} onChange={e => setFormData({...formData, dataVenc: e.target.value})} /></div>
+                )}
               </>
             )}
             <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800"><span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">{tipo === 'ativo' && formData.ativoTipo === 'Renda Fixa' ? 'Data da Aplicação' : (tipo === 'devedor' ? 'Data que Emprestou' : 'Data da Transação')}</span><input type="date" value={formData.data} className={`${inputClass} !bg-slate-900 border-none !p-2`} onChange={e => setFormData({...formData, data: e.target.value})} /></div>
