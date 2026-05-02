@@ -50,7 +50,7 @@ export default function Dashboard() {
         fetchData('bdLancamentos'),
         fetchData('bdDevedores'),
         fetchData('meus_bancos'),
-        fetchData('bdRendas') // Criaremos essa aba para os salários
+        fetchData('bdRendas') // Lendo a nova aba de Salários
       ]);
 
       if (varData?.success) setAtivosVariaveis(varData.data || []);
@@ -101,7 +101,8 @@ export default function Dashboard() {
 
   // Funções Auxiliares de Cálculo para o Resumo
   const calcTotalInvestido = () => {
-    const varTotal = ativosVariaveis.reduce((acc, item) => acc + ((parseFloat(item.dados[2]) || 0) * (parseFloat(item.dados[3]) || 0)), 0);
+    // Agora lê direto da Coluna E (dados[4]) da sua planilha para o custo exato
+    const varTotal = ativosVariaveis.reduce((acc, item) => acc + (parseFloat(item.dados[4]) || 0), 0);
     const fixoTotal = ativosFixos.reduce((acc, item) => acc + (parseFloat(item.dados[5]) || 0), 0);
     return varTotal + fixoTotal;
   };
@@ -173,7 +174,6 @@ function ResumoView({ patrimonio, fatura, receber, renda }) {
 
   return (
     <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      {/* Card Principal - Saldo do Mês */}
       <div className="bg-gradient-to-br from-emerald-900/40 to-slate-900 border border-emerald-500/20 p-8 rounded-[2.5rem] shadow-xl relative overflow-hidden">
         <div className="absolute -top-10 -right-10 p-6 opacity-5 text-emerald-500"><PieChart size={150}/></div>
         <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-1">Caixa Livre (Mês)</p>
@@ -202,18 +202,19 @@ function ResumoView({ patrimonio, fatura, receber, renda }) {
 }
 
 // ==========================================
-// VIEW: CARTEIRA (COM LEITURA DE LUCRO DA PLANILHA)
+// VIEW: CARTEIRA (AÇÕES, FIIS, CRIPTO E FIXA)
 // ==========================================
 function CarteiraView({ ativosVar, ativosFixos }) {
   const acoes = ativosVar.filter(a => a.dados[1]?.toUpperCase().includes('AÇÃO'));
   const fiis = ativosVar.filter(a => a.dados[1]?.toUpperCase().includes('FII'));
   const cripto = ativosVar.filter(a => a.dados[1]?.toUpperCase().includes('CRIPTO'));
 
-  const calcularTotalPago = (lista) => lista.reduce((acc, item) => acc + ((parseFloat(item.dados[2]) || 0) * (parseFloat(item.dados[3]) || 0)), 0);
+  // Custo Total lido da Coluna E (dados[4]) da sua planilha
+  const calcularTotalPago = (lista) => lista.reduce((acc, item) => acc + (parseFloat(item.dados[4]) || 0), 0);
   
-  // LEITURA DO GOOGLE SHEETS: Coluna G (dados[6]) = Lucro, Coluna H (dados[7]) = Proventos
-  const calcularLucroPlanilha = (lista) => lista.reduce((acc, item) => acc + (parseFloat(item.dados[6]) || 0), 0);
-  const calcularProventosPlanilha = (lista) => lista.reduce((acc, item) => acc + (parseFloat(item.dados[7]) || 0), 0);
+  // Lucro lido da Coluna H (dados[7]) e Proventos (se houver no futuro) da Coluna L (dados[11])
+  const calcularLucroPlanilha = (lista) => lista.reduce((acc, item) => acc + (parseFloat(item.dados[7]) || 0), 0);
+  const calcularProventosPlanilha = (lista) => lista.reduce((acc, item) => acc + (parseFloat(item.dados[11]) || 0), 0);
 
   const totalAcoes = calcularTotalPago(acoes);
   const totalFiis = calcularTotalPago(fiis);
@@ -228,12 +229,13 @@ function CarteiraView({ ativosVar, ativosFixos }) {
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="bg-emerald-900/20 border border-emerald-500/20 p-8 rounded-[2.5rem] shadow-xl relative overflow-hidden">
-        <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-1">Total Investido (Aporte)</p>
+        <div className="absolute top-0 right-0 p-6 opacity-10 text-emerald-500"><Landmark size={100}/></div>
+        <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-1">Total Investido (Custo)</p>
         <p className="text-4xl font-black text-white tracking-tighter">R$ {totalGeral.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
         
         <div className="mt-6 flex flex-wrap gap-4 text-xs font-bold text-slate-400">
           <div className="flex flex-col">
-            <span className="text-[9px] uppercase tracking-widest text-slate-500">Lucro Atual (Via B3)</span>
+            <span className="text-[9px] uppercase tracking-widest text-slate-500">Lucro Atual</span>
             <span className={lucroEstimado >= 0 ? "text-emerald-400" : "text-red-400"}>
               {lucroEstimado >= 0 ? '+' : ''} R$ {lucroEstimado.toLocaleString('pt-BR', {minimumFractionDigits: 2})}
             </span>
@@ -266,7 +268,7 @@ function InfoCard({ icon, title, value, color }) {
 }
 
 // ==========================================
-// VIEW: COBRANÇAS E DEVEDORES (Mantida igual a anterior)
+// VIEW: COBRANÇAS E DEVEDORES 
 // ==========================================
 function DevedoresView({ items }) {
   const calcularMetricas = () => {
@@ -309,7 +311,6 @@ function DevedorCard({ item }) {
   const valorOriginal = parseFloat(item.dados[7]) || 0; 
   const totalPago = parseFloat(item.dados[3]) || 0; 
   const saldoDevedor = parseFloat(item.dados[4]) || valorOriginal; 
-  const jurosMensal = parseFloat(item.dados[10]) || 0; 
   const status = item.dados[9] || 'Pendente'; 
   const isConcluido = status === 'Concluído';
 
@@ -362,7 +363,7 @@ function CartoesView({ items, mes }) {
 }
 
 // ==========================================
-// MODAL DE LANÇAMENTO (COM SALÁRIO E SELECT REFINADO)
+// MODAL DE LANÇAMENTO (ORGANIZADO)
 // ==========================================
 function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos }) {
   const [formData, setFormData] = useState({ 
@@ -372,7 +373,6 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos }) {
     nome: '', valor: '', juros: '', he50: '', he100: '', descontos: ''
   });
   
-  // Classe atualizada para o Select (appearance-none esconde a seta feia nativa)
   const inputClass = "w-full bg-slate-800 border border-slate-700/50 rounded-2xl p-4 text-white placeholder:text-slate-500 focus:border-emerald-500/50 focus:ring-1 outline-none transition-all text-sm font-bold";
   const selectClass = `${inputClass} appearance-none pr-10`;
 
@@ -417,23 +417,14 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos }) {
                 payload = { "Data": dataFormatadaBR, "Ticker": formData.nome.toUpperCase(), "Tipo_Operacao": "COMPRA", "Quantidade": parseFloat(formData.valor) || 0, "Preco_Unitario": parseFloat(formData.juros) || 0, "Tipo_Ativo": formData.ativoTipo };
               }
             } else if (tipo === 'salario') {
-              // LÓGICA DE SALÁRIO
-              abaDestino = 'bdRendas'; // Crie esta aba na planilha!
+              abaDestino = 'bdRendas'; 
               const bruto = parseFloat(formData.valor) || 0;
               const h50 = parseFloat(formData.he50) || 0;
               const h100 = parseFloat(formData.he100) || 0;
               const desc = parseFloat(formData.descontos) || 0;
               const liquido = bruto + h50 + h100 - desc;
               
-              payload = { 
-                "Data": dataFormatadaBR, 
-                "Salario Bruto": bruto, 
-                "HE 50%": h50, 
-                "HE 100%": h100, 
-                "Descontos": desc, 
-                "Liquido": liquido, 
-                "Observacoes": "App" 
-              };
+              payload = { "Data": dataFormatadaBR, "Salario Bruto": bruto, "HE 50%": h50, "HE 100%": h100, "Descontos": desc, "Liquido": liquido, "Observacoes": "App" };
             }
             onSave(payload, abaDestino);
           }}>
@@ -459,7 +450,6 @@ function LancamentoModal({ tipo, setTipo, onClose, onSave, meusBancos }) {
                 </div>
                 <input type="number" step="any" placeholder="Total Descontos R$" className={`${inputClass} border-red-500/50 text-red-400`} onChange={e => setFormData({...formData, descontos: e.target.value})} />
                 
-                {/* Prévia do Líquido */}
                 <div className="p-4 bg-emerald-900/20 border border-emerald-500/20 rounded-2xl flex justify-between items-center">
                   <span className="text-[10px] font-black uppercase text-emerald-500 tracking-widest">Total Líquido Estimado</span>
                   <span className="text-lg font-black text-emerald-400">
