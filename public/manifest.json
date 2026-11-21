@@ -1,11 +1,11 @@
 {
-  "name": "AppFinance Pro",
+  "name": "AppFinance Banking",
   "short_name": "AppFinance",
-  "description": "Torre de Controle Financeiro",
+  "description": "Private Banking & Gestão de Patrimônio",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#020617",
-  "theme_color": "#10b981",
+  "background_color": "#090a0f",
+  "theme_color": "#090a0f",
   "orientation": "portrait",
   "icons": [
     {
