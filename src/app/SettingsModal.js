@@ -643,12 +643,33 @@ export default function SettingsModal({
                     onClick={onDispararTelegram}
                     className="text-[11px] text-emerald-400 font-semibold"
                   >
-                    Testar Bot Agora →
+                    Enviar Resumo →
                   </button>
                 </div>
                 <p className="text-[11px] text-zinc-400 leading-relaxed">
-                  Após atualizar o <code>API.gs</code> e rodar <code>ativarWebhookBotTelegram()</code> uma vez no Apps Script, você pode mandar mensagens no chat do seu Bot no Telegram para lançar na hora:
+                  Como seu app roda na <strong>Cloudflare</strong>, clique no botão abaixo para conectar seu Bot do Telegram diretamente ao link da sua Cloudflare (<code>/api/proxy</code>):
                 </p>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const webhookUrl = `${window.location.origin}/api/proxy`;
+                      const res = await fetch('/api/proxy', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'ativar_webhook_telegram', webhookUrl })
+                      });
+                      const json = await res.json();
+                      if (json.success) showToast("Bot do Telegram conectado à sua Cloudflare com sucesso!");
+                      else showToast(json.message || "Falha ao conectar Webhook.", "error");
+                    } catch (_) {
+                      showToast("Erro ao conectar Webhook do Telegram.", "error");
+                    }
+                  }}
+                  className="w-full py-2.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-400 text-xs font-semibold"
+                >
+                  🔗 Ativar Bot Interativo no Link da Cloudflare (1 Clique)
+                </button>
                 <div className="bg-[#121318] border border-[#1f2128] p-3 rounded-xl space-y-1 text-[11px] font-mono text-zinc-300">
                   <p>• <span className="text-emerald-400">cartao 45,90 Uber Nubank</span> (Lança na fatura)</p>
                   <p>• <span className="text-emerald-400">pix 120 Supermercado</span> (Lança Pix pago)</p>
