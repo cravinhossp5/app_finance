@@ -8,6 +8,7 @@
     color: #f4f4f5;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     -webkit-tap-highlight-color: transparent;
+    transition: background-color 0.2s ease, color 0.2s ease;
   }
 }
 
@@ -17,4 +18,96 @@
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* =========================================================
+   TEMA CLARO (CLEAN PRIVATE BANKING LIGHT MODE)
+   ========================================================= */
+.theme-light {
+  background-color: #f3f5f8 !important;
+  color: #0f172a !important;
+}
+
+.theme-light .bg-\[\#090a0f\] {
+  background-color: #f3f5f8 !important;
+}
+
+.theme-light .bg-\[\#090a0f\]\/90,
+.theme-light .bg-\[\#0c0d12\]\/95 {
+  background-color: rgba(255, 255, 255, 0.92) !important;
+}
+
+.theme-light .bg-\[\#121318\] {
+  background-color: #ffffff !important;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+
+.theme-light .bg-\[\#121318\]\/50,
+.theme-light .bg-\[\#121318\]\/60 {
+  background-color: rgba(255, 255, 255, 0.75) !important;
+}
+
+.theme-light .bg-\[\#16181f\],
+.theme-light .bg-\[\#181a20\],
+.theme-light .bg-\[\#0d0e13\],
+.theme-light .bg-\[\#1f222b\] {
+  background-color: #f1f5f9 !important;
+}
+
+.theme-light .border-\[\#1f2128\],
+.theme-light .border-\[\#181a22\],
+.theme-light .border-\[\#1c1e26\],
+.theme-light .border-\[\#272a34\],
+.theme-light .border-\[\#252830\],
+.theme-light .border-\[\#222530\],
+.theme-light .border-\[\#1a1c22\] {
+  border-color: #e2e8f0 !important;
+}
+
+.theme-light .divide-\[\#1a1c24\] > :not([hidden]) ~ :not([hidden]) {
+  border-color: #e2e8f0 !important;
+}
+
+.theme-light .text-zinc-100,
+.theme-light .text-zinc-200 {
+  color: #0f172a !important;
+}
+
+.theme-light .text-zinc-300 {
+  color: #334155 !important;
+}
+
+.theme-light .text-zinc-400 {
+  color: #475569 !important;
+}
+
+.theme-light .text-zinc-500 {
+  color: #64748b !important;
+}
+
+.theme-light .bg-zinc-800,
+.theme-light .bg-zinc-800\/80,
+.theme-light .bg-zinc-900 {
+  background-color: #e2e8f0 !important;
+  color: #334155 !important;
+}
+
+.theme-light .text-emerald-400 {
+  color: #059669 !important;
+}
+
+.theme-light .text-amber-400 {
+  color: #d97706 !important;
+}
+
+.theme-light .text-rose-400 {
+  color: #e11d48 !important;
+}
+
+.theme-light .text-blue-400 {
+  color: #2563eb !important;
+}
+
+.theme-light .text-violet-400 {
+  color: #7c3aed !important;
 }
