@@ -9,7 +9,7 @@ import {
   MessageCircle, Bookmark, CheckCheck, Bell, Lock, Unlock, Search, Copy, Target,
   ArrowUpRight, ArrowDownRight, Plus, Send, ShieldCheck, Calendar, Settings, Sun, Moon
 } from 'lucide-react';
-import SettingsModal, { detectarCategoriaAuto } from './SettingsModal';
+import SettingsModal, { detectarCategoriaAuto, aplicarRegraLugarNoTexto, RegraLugarRapidaModal, DividaFuturaModal } from './SettingsModal';
 
 // ==========================================
 // UTILITÁRIOS FINANCEIROS E DATAS
@@ -215,6 +215,7 @@ export default function Dashboard() {
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsTabInicial, setSettingsTabInicial] = useState('perfil');
   const [theme, setTheme] = useState('dark');
   const [savedPin, setSavedPin] = useState('');
   const [isLocked, setIsLocked] = useState(false);
@@ -230,6 +231,28 @@ export default function Dashboard() {
     iniciarOculto: false,
     abaInicial: 'dashboard'
   });
+
+  // Estados de Lugares Pré-Definidos (Regras Automáticas) e Dívidas Futuras / Contrato do Apartamento
+  const [regrasLugares, setRegrasLugares] = useState([
+    {
+      id: 'default_opea',
+      termo: 'opea seguros',
+      nomeExibicao: 'Parcela Apartamento (Opea)',
+      categoria: 'Imóvel / Obra',
+      tipoLancamento: 'Parcela Imóvel'
+    },
+    {
+      id: 'default_nelson',
+      termo: 'bar do nelson',
+      nomeExibicao: 'Bar do Nelson',
+      categoria: 'Fastfood',
+      tipoLancamento: 'Padrao'
+    }
+  ]);
+  const [dividasFuturas, setDividasFuturas] = useState([]);
+  const [regraModalItem, setRegraModalItem] = useState(null);
+  const [dividaModalItem, setDividaModalItem] = useState(null);
+  const [isDividaModalOpen, setIsDividaModalOpen] = useState(false);
 
   const meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
   const mesesCurtos = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
@@ -272,6 +295,16 @@ export default function Dashboard() {
       } else {
         const meta = localStorage.getItem('appfinance_meta');
         if (meta && !isNaN(Number(meta))) setMetaPatrimonio(Number(meta));
+      }
+      const rawRegras = localStorage.getItem('appfinance_regras_lugares');
+      if (rawRegras) {
+        const parsedRegras = JSON.parse(rawRegras);
+        if (Array.isArray(parsedRegras) && parsedRegras.length > 0) setRegrasLugares(parsedRegras);
+      }
+      const rawDividas = localStorage.getItem('appfinance_dividas_futuras');
+      if (rawDividas) {
+        const parsedDividas = JSON.parse(rawDividas);
+        if (Array.isArray(parsedDividas)) setDividasFuturas(parsedDividas);
       }
     } catch (_) {}
   }, []);
@@ -354,6 +387,14 @@ export default function Dashboard() {
         setSalarios(d.bdRendas || []);
         setHistoricoOrdens(d.DB_Historico_Ordens || []);
         processarBancos(d.meus_bancos || []);
+        if (Array.isArray(d.regras_lugares) && d.regras_lugares.length > 0) {
+          setRegrasLugares(d.regras_lugares);
+          try { localStorage.setItem('appfinance_regras_lugares', JSON.stringify(d.regras_lugares)); } catch (_) {}
+        }
+        if (Array.isArray(d.dividas_futuras)) {
+          setDividasFuturas(d.dividas_futuras);
+          try { localStorage.setItem('appfinance_dividas_futuras', JSON.stringify(d.dividas_futuras)); } catch (_) {}
+        }
       } else {
         const call = async (aba) => {
           const res = await fetch('/api/proxy', {
@@ -1042,6 +1083,31 @@ export default function Dashboard() {
     }
   };
 
+  const handleSalvarConfigAutomacao = async (novasRegras, novasDividas, msgToast = '') => {
+    const regrasFinal = Array.isArray(novasRegras) ? novasRegras : regrasLugares;
+    const dividasFinal = Array.isArray(novasDividas) ? novasDividas : dividasFuturas;
+    setRegrasLugares(regrasFinal);
+    setDividasFuturas(dividasFinal);
+    try {
+      localStorage.setItem('appfinance_regras_lugares', JSON.stringify(regrasFinal));
+      localStorage.setItem('appfinance_dividas_futuras', JSON.stringify(dividasFinal));
+    } catch (_) {}
+    try {
+      await fetch('/api/proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'salvar_config_automacao',
+          regras_lugares: regrasFinal,
+          dividas_futuras: dividasFinal
+        })
+      });
+      if (msgToast) showToast(msgToast);
+    } catch (_) {
+      if (msgToast) showToast(msgToast);
+    }
+  };
+
   return (
     <main className={`min-h-screen bg-[#090a0f] text-zinc-100 pb-24 font-sans relative ${theme === 'light' ? 'theme-light' : ''}`}>
       {/* Toast Notification Bancário */}
@@ -1080,7 +1146,8 @@ export default function Dashboard() {
       {/* Modal Completo de Configurações & Automação 100% */}
       {isSettingsOpen && (
         <SettingsModal
-          onClose={() => setIsSettingsOpen(false)}
+          onClose={() => { setIsSettingsOpen(false); setSettingsTabInicial('geral'); }}
+          abaInicialModal={settingsTabInicial}
           theme={theme}
           onToggleTheme={toggleTheme}
           settings={{ ...appSettings, metaPatrimonio }}
@@ -1130,7 +1197,93 @@ export default function Dashboard() {
           onProcessarNotificacaoAuto={handleProcessarNotificacaoAuto}
           onDispararTelegram={handleDispararTelegram}
           onExportBackup={handleExportBackup}
+          regrasLugares={regrasLugares}
+          dividasFuturas={dividasFuturas}
+          onSaveRegrasLugares={(novasRegras) => handleSalvarConfigAutomacao(novasRegras, dividasFuturas)}
           showToast={showToast}
+        />
+      )}
+
+      {/* Modal Rápido: Pré-definir Lugar / Razão Social a partir de um gasto */}
+      {regraModalItem && (
+        <RegraLugarRapidaModal
+          itemInicial={regraModalItem}
+          onClose={() => setRegraModalItem(null)}
+          onSaveRegra={async (novaRegra) => {
+            const listaSemDuplicata = regrasLugares.filter(
+              r => String(r.termo || '').toLowerCase() !== novaRegra.termo.toLowerCase()
+            );
+            const novasRegras = [novaRegra, ...listaSemDuplicata];
+            await handleSalvarConfigAutomacao(novasRegras, dividasFuturas, `Regra "${novaRegra.termo}" pré-definida para ${novaRegra.categoria}!`);
+            if (regraModalItem.linha && regraModalItem.dados) {
+              const d = regraModalItem.dados;
+              const novoTipo = novaRegra.tipoLancamento === 'Padrao' ? d[6] : novaRegra.tipoLancamento;
+              await handleGravarDados(
+                [d[5], novoTipo, d[7], novaRegra.nomeExibicao || d[8], novaRegra.categoria, d[10], d[11], d[12]],
+                'bdLancamentos',
+                regraModalItem.linha
+              );
+            }
+            setRegraModalItem(null);
+          }}
+        />
+      )}
+
+      {/* Modal: Cadastrar / Editar Contrato do Apartamento ou Dívida Futura */}
+      {isDividaModalOpen && (
+        <DividaFuturaModal
+          itemInicial={dividaModalItem}
+          onClose={() => { setIsDividaModalOpen(false); setDividaModalItem(null); }}
+          onSaveDivida={async (payloadDivida, qtdMesesAgendar = 0) => {
+            const existe = dividasFuturas.some(d => d.id === payloadDivida.id);
+            const novasDividas = existe
+              ? dividasFuturas.map(d => (d.id === payloadDivida.id ? payloadDivida : d))
+              : [...dividasFuturas, payloadDivida];
+
+            let novasRegras = [...regrasLugares];
+            if (payloadDivida.razaoSocial) {
+              const termoLimpo = payloadDivida.razaoSocial.toLowerCase().trim();
+              const regraAuto = {
+                id: `div_${payloadDivida.id}`,
+                termo: termoLimpo,
+                nomeExibicao: payloadDivida.ehImovel ? `Parcela ${payloadDivida.nome}` : payloadDivida.nome,
+                categoria: payloadDivida.ehImovel ? 'Imóvel / Obra' : 'Contas Fixas',
+                tipoLancamento: payloadDivida.ehImovel ? 'Parcela Imóvel' : 'Conta Fixa'
+              };
+              novasRegras = [regraAuto, ...novasRegras.filter(r => String(r.termo || '').toLowerCase() !== termoLimpo)];
+            }
+
+            setIsDividaModalOpen(false);
+            setDividaModalItem(null);
+            await handleSalvarConfigAutomacao(novasRegras, novasDividas, `Contrato "${payloadDivida.nome}" salvo com sucesso!`);
+
+            const qtdMeses = parseInt(qtdMesesAgendar, 10) || 0;
+            if (qtdMeses > 0) {
+              const hoje = new Date();
+              const diaVenc = parseInt(payloadDivida.diaVencimento, 10) || 15;
+              const valParc = parseCurrency(payloadDivida.valorParcelaPadrao) ||
+                Number((Math.max(0, parseCurrency(payloadDivida.valorTotal) - parseCurrency(payloadDivida.valorJaPagoAntes)) / Math.max(1, parseInt(payloadDivida.qtdParcelasTotal, 10) || qtdMeses)).toFixed(2));
+              const tipoLanc = payloadDivida.ehImovel ? 'Parcela Imóvel' : 'Conta Fixa';
+              const catLanc = payloadDivida.ehImovel ? 'Imóvel / Obra' : 'Contas Fixas';
+              const lotes = [];
+
+              for (let idx = 0; idx < qtdMeses; idx++) {
+                const dMes = new Date(hoje.getFullYear(), hoje.getMonth() + idx, diaVenc);
+                const vMesBR = formatDateToBR(dMes);
+                lotes.push([
+                  vMesBR,
+                  tipoLanc,
+                  valParc,
+                  `${payloadDivida.nome} (${idx + 1}/${qtdMeses})`,
+                  catLanc,
+                  'Boleto / Construtora',
+                  'Pendente',
+                  vMesBR
+                ]);
+              }
+              await handleGravarLote(lotes, 'bdLancamentos', `${lotes.length} parcelas futuras agendadas na planilha!`);
+            }
+          }}
         />
       )}
 
@@ -1329,6 +1482,36 @@ export default function Dashboard() {
             onEdit={i => abrirEdicao(i, 'conta_fixa')}
             onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdLancamentos', linha: l, message: 'Esta conta será removida permanentemente.' })}
             onStatusChange={(i, s) => handleGravarDados([i.dados[5], i.dados[6], i.dados[7], i.dados[8], i.dados[9], i.dados[10], s, i.dados[12]], 'bdLancamentos', i.linha)}
+            dividasFuturas={dividasFuturas}
+            onNovaDividaFutura={(presetImovel = false) => {
+              setDividaModalItem(
+                presetImovel
+                  ? {
+                      nome: 'Entrada / Construtora Apartamento',
+                      ehImovel: true,
+                      razaoSocial: 'opea seguros',
+                      valorTotalContrato: '',
+                      valorJaPagoAntes: '',
+                      totalParcelas: 36,
+                      dataPrevistaFim: ''
+                    }
+                  : null
+              );
+              setIsDividaModalOpen(true);
+            }}
+            onEditarDividaFutura={(divida) => {
+              setDividaModalItem(divida);
+              setIsDividaModalOpen(true);
+            }}
+            onExcluirDividaFutura={async (idDivida) => {
+              const novas = dividasFuturas.filter(d => d.id !== idDivida);
+              await handleSalvarConfigAutomacao(regrasLugares, novas, "Contrato removido do acompanhamento.");
+            }}
+            onPredefinirLugar={(item) => setRegraModalItem(item)}
+            onAbrirRegrasLugares={() => {
+              setSettingsTabInicial('lugares');
+              setIsSettingsOpen(true);
+            }}
           />
         )}
         
@@ -1409,6 +1592,11 @@ export default function Dashboard() {
             onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdLancamentos', linha: l, message: 'A despesa será removida da fatura.' })}
             onStatusChange={(i, s) => handleGravarDados([i.dados[5], i.dados[6], i.dados[7], i.dados[8], i.dados[9], i.dados[10], s, i.dados[12]], 'bdLancamentos', i.linha)}
             onPagarFaturaBanco={handlePagarFaturaBanco}
+            onPredefinirLugar={(item) => setRegraModalItem(item)}
+            onAbrirRegrasLugares={() => {
+              setSettingsTabInicial('lugares');
+              setIsSettingsOpen(true);
+            }}
           />
         )}
       </div>
@@ -1446,6 +1634,13 @@ export default function Dashboard() {
           infoBancos={infoBancos}
           cdiMensal={cdiMensal}
           setCustomDialog={setCustomDialog}
+          regrasLugares={regrasLugares}
+          onSaveRegraRapida={async (novaRegra) => {
+            const listaSemDuplicata = regrasLugares.filter(
+              r => String(r.termo || '').toLowerCase() !== novaRegra.termo.toLowerCase()
+            );
+            await handleSalvarConfigAutomacao([novaRegra, ...listaSemDuplicata], dividasFuturas, `Lugar "${novaRegra.termo}" pré-salvo!`);
+          }}
         />
       )}
     </main>
@@ -1675,13 +1870,30 @@ function ResumoView({
 // ==========================================
 // 2. NOVA ABA: CONTAS FIXAS & IMÓVEL (JUROS DE OBRA, PARCELA APTO, BOLETOS)
 // ==========================================
-function ContasFixasView({ todosLancamentos, contasDoMes, mesNome, hideValues, onNovaConta, onReplicarMesAnterior, onEdit, onDelete, onStatusChange }) {
+function ContasFixasView({
+  todosLancamentos,
+  contasDoMes,
+  mesNome,
+  hideValues,
+  onNovaConta,
+  onReplicarMesAnterior,
+  onEdit,
+  onDelete,
+  onStatusChange,
+  dividasFuturas = [],
+  onNovaDividaFutura,
+  onEditarDividaFutura,
+  onExcluirDividaFutura,
+  onPredefinirLugar,
+  onAbrirRegrasLugares
+}) {
   const [filtroTipo, setFiltroTipo] = useState('todos'); // 'todos', 'imovel', 'fixas', 'pix'
   const [busca, setBusca] = useState('');
 
   // Acumulado Histórico do Imóvel / Apartamento (Parcelas vs. Juros de Obra)
   const resumoImovelHistorico = useMemo(() => {
     let totalPagoParcelas = 0;
+    let qtdParcelasPagasApp = 0;
     let totalPagoJurosObra = 0;
     let mesAtualImovel = 0;
 
@@ -1690,8 +1902,12 @@ function ContasFixasView({ todosLancamentos, contasDoMes, mesNome, hideValues, o
       const val = parseCurrency(item.dados[7]);
       const pago = safeString(item.dados[11]).toUpperCase() === 'PAGO';
       if (pago) {
-        if (isJurosDeObra(item)) totalPagoJurosObra += val;
-        else totalPagoParcelas += val;
+        if (isJurosDeObra(item)) {
+          totalPagoJurosObra += val;
+        } else {
+          totalPagoParcelas += val;
+          qtdParcelasPagasApp += 1;
+        }
       }
     });
 
@@ -1701,11 +1917,80 @@ function ContasFixasView({ todosLancamentos, contasDoMes, mesNome, hideValues, o
 
     return {
       totalPagoParcelas,
+      qtdParcelasPagasApp,
       totalPagoJurosObra,
       totalGeralImovel: totalPagoParcelas + totalPagoJurosObra,
       mesAtualImovel
     };
   }, [todosLancamentos, contasDoMes]);
+
+  // Cálculo de evolução de cada Contrato / Dívida Futura cadastrada
+  const contratosCalculados = useMemo(() => {
+    return (dividasFuturas || []).map(div => {
+      const valorTotal = parseCurrency(div.valorTotal ?? div.valorTotalContrato);
+      const pagoAntes = parseCurrency(div.valorJaPagoAntes);
+      const termoRazao = safeString(div.razaoSocial).toLowerCase();
+      const termoNome = safeString(div.nome).toLowerCase();
+
+      let pagoNoApp = 0;
+      let parcelasPagasNoApp = 0;
+      let pendentesNoApp = 0;
+
+      todosLancamentos.forEach(item => {
+        const desc = safeString(item.dados[8]).toLowerCase();
+        const tipo = safeString(item.dados[6]).toUpperCase();
+        const val = parseCurrency(item.dados[7]);
+        const isPago = safeString(item.dados[11]).toUpperCase() === 'PAGO';
+
+        // Juros de obra do banco NUNCA abatem o saldo devedor da construtora/contrato!
+        if (isJurosDeObra(item)) return;
+
+        let pertenceAoContrato = false;
+        if (div.ehImovel) {
+          pertenceAoContrato =
+            tipo === 'PARCELA IMÓVEL' ||
+            tipo === 'PARCELA IMOVEL' ||
+            (isItemImovel(item) && !isJurosDeObra(item)) ||
+            (termoRazao && desc.includes(termoRazao));
+        } else {
+          pertenceAoContrato =
+            (termoRazao && desc.includes(termoRazao)) ||
+            (termoNome && desc.includes(termoNome));
+        }
+
+        if (pertenceAoContrato) {
+          if (isPago) {
+            pagoNoApp += val;
+            parcelasPagasNoApp += 1;
+          } else {
+            pendentesNoApp += 1;
+          }
+        }
+      });
+
+      const totalQuitado = pagoAntes + pagoNoApp;
+      const saldoDevedor = Math.max(0, valorTotal - totalQuitado);
+      const percQuitado = valorTotal > 0 ? Math.min(100, (totalQuitado / valorTotal) * 100) : 0;
+      const totalParcelas = parseInt(div.qtdParcelasTotal ?? div.totalParcelas) || 0;
+      const parcelasRestantes = totalParcelas > 0
+        ? Math.max(0, totalParcelas - parcelasPagasNoApp)
+        : pendentesNoApp;
+      const previsaoStr = div.previsaoTermino || (div.dataPrevistaFim ? formatDateToBR(parseDataBR(div.dataPrevistaFim)) : '');
+
+      return {
+        ...div,
+        valorTotal,
+        pagoAntes,
+        pagoNoApp,
+        totalQuitado,
+        saldoDevedor,
+        percQuitado,
+        parcelasPagasNoApp,
+        parcelasRestantes,
+        previsaoStr
+      };
+    });
+  }, [dividasFuturas, todosLancamentos]);
 
   let totalMes = 0;
   let totalPagoMes = 0;
@@ -1744,18 +2029,27 @@ function ContasFixasView({ todosLancamentos, contasDoMes, mesNome, hideValues, o
     <div className="space-y-4">
       {/* Card Resumo Contas Fixas do Mês */}
       <div className="bg-[#121318] border border-[#1f2128] rounded-2xl p-5">
-        <div className="flex justify-between items-start">
+        <div className="flex justify-between items-start gap-2">
           <div>
             <span className="text-xs font-medium text-zinc-400">Compromissos & Contas Fixas ({mesNome})</span>
             <p className="text-3xl font-bold text-zinc-100 tabular-nums mt-0.5">R$ {formatMoney(totalMes, hideValues)}</p>
           </div>
-          <button
-            onClick={onReplicarMesAnterior}
-            className="bg-[#181a20] hover:bg-zinc-800 border border-[#272a34] text-zinc-200 px-3 py-2 rounded-xl text-[11px] font-medium flex items-center gap-1.5 active:scale-95 transition-all"
-            title="Copiar contas fixas do mês anterior para este mês"
-          >
-            <Copy size={13} className="text-emerald-400" /> Importar Mês Ant.
-          </button>
+          <div className="flex gap-1.5">
+            <button
+              onClick={onAbrirRegrasLugares}
+              className="bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/30 text-emerald-400 px-2.5 py-2 rounded-xl text-[11px] font-semibold flex items-center gap-1 active:scale-95 transition-all"
+              title="Gerenciar lugares e razões sociais pré-definidas (ex: Opea Seguros, Bar do Nelson)"
+            >
+              <Bookmark size={13} /> Lugares
+            </button>
+            <button
+              onClick={onReplicarMesAnterior}
+              className="bg-[#181a20] hover:bg-zinc-800 border border-[#272a34] text-zinc-200 px-2.5 py-2 rounded-xl text-[11px] font-medium flex items-center gap-1 active:scale-95 transition-all"
+              title="Copiar contas fixas do mês anterior para este mês"
+            >
+              <Copy size={13} className="text-emerald-400" /> Mês Ant.
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3 mt-4 pt-4 border-t border-[#1f2128]">
@@ -1791,37 +2085,138 @@ function ContasFixasView({ todosLancamentos, contasDoMes, mesNome, hideValues, o
         </div>
       </div>
 
-      {/* Painel Especial: Acompanhamento Acumulado do Imóvel / Apartamento */}
-      <div className="bg-[#121318] border border-[#1f2128] rounded-2xl p-5">
-        <div className="flex items-center justify-between mb-3">
+      {/* Painel Especial: Evolução do Contrato do Apartamento & Dívidas Futuras */}
+      <div className="bg-[#121318] border border-[#1f2128] rounded-2xl p-5 space-y-4">
+        <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
-              <Building2 size={17} />
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
+              <Building2 size={18} />
             </div>
             <div>
-              <h4 className="text-xs font-semibold text-zinc-100">Meu Imóvel / Apartamento</h4>
-              <p className="text-[11px] text-zinc-500">Acumulado histórico de parcelas e evolução de obra</p>
+              <h4 className="text-xs font-semibold text-zinc-100">Evolução do Apartamento & Dívidas Futuras</h4>
+              <p className="text-[11px] text-zinc-500">Saldo devedor real (sem misturar juros de obra) e contratos futuros</p>
             </div>
           </div>
-          <span className="text-xs font-semibold text-zinc-200 tabular-nums">
-            Total Pago: R$ {formatMoney(resumoImovelHistorico.totalGeralImovel, hideValues)}
-          </span>
+          <button
+            onClick={() => onNovaDividaFutura(false)}
+            className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded-xl text-[11px] font-semibold flex items-center gap-1 whitespace-nowrap active:scale-95 transition-all"
+          >
+            <Plus size={13} /> Nova Dívida
+          </button>
         </div>
 
+        {/* Resumo Histórico de Desembolso com o Imóvel (Parcelas que abatem saldo vs. Juros de Obra do Banco) */}
         <div className="grid grid-cols-3 gap-2 text-xs">
-          <div className="bg-[#16181f] p-3 rounded-xl">
-            <span className="text-[10px] text-zinc-400 block">Parcelas Pagas</span>
+          <div className="bg-[#16181f] p-3 rounded-xl border border-[#1f2128]">
+            <span className="text-[10px] text-zinc-400 block">Parcelas Apto (Abatem)</span>
             <span className="font-semibold text-emerald-400 tabular-nums">R$ {formatMoney(resumoImovelHistorico.totalPagoParcelas, hideValues)}</span>
           </div>
-          <div className="bg-[#16181f] p-3 rounded-xl">
-            <span className="text-[10px] text-zinc-400 block">Juros Obra Pagos</span>
+          <div className="bg-[#16181f] p-3 rounded-xl border border-[#1f2128]">
+            <span className="text-[10px] text-zinc-400 block">Juros Obra (Banco)</span>
             <span className="font-semibold text-amber-400 tabular-nums">R$ {formatMoney(resumoImovelHistorico.totalPagoJurosObra, hideValues)}</span>
           </div>
-          <div className="bg-[#16181f] p-3 rounded-xl">
-            <span className="text-[10px] text-zinc-400 block">Neste Mês</span>
+          <div className="bg-[#16181f] p-3 rounded-xl border border-[#1f2128]">
+            <span className="text-[10px] text-zinc-400 block">Imóvel Neste Mês</span>
             <span className="font-semibold text-zinc-100 tabular-nums">R$ {formatMoney(resumoImovelHistorico.mesAtualImovel, hideValues)}</span>
           </div>
         </div>
+
+        {/* Lista de Contratos Cadastrados (Apartamento / Construtora e Outras Dívidas Futuras) */}
+        {contratosCalculados.length === 0 ? (
+          <div className="bg-[#16181f] border border-dashed border-[#272a34] rounded-xl p-4 text-center space-y-2.5">
+            <p className="text-xs font-medium text-zinc-300">
+              Configure o valor total do Contrato do Apartamento (Construtora) ou outras dívidas futuras
+            </p>
+            <p className="text-[11px] text-zinc-500">
+              Ao vincular a razão social <strong className="text-emerald-400">&quot;opea seguros&quot;</strong>, cada pagamento via Pix ou Boleto abate o saldo devedor automaticamente!
+            </p>
+            <div className="flex justify-center gap-2 pt-1">
+              <button
+                onClick={() => onNovaDividaFutura(true)}
+                className="bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-400 px-3.5 py-2 rounded-xl text-xs font-semibold"
+              >
+                + Configurar Contrato do Apartamento
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {contratosCalculados.map(c => (
+              <div key={c.id} className="bg-[#16181f] border border-[#222530] rounded-xl p-4 space-y-3">
+                <div className="flex justify-between items-start gap-2">
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-semibold text-zinc-100">{c.nome}</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-md font-semibold ${c.ehImovel ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
+                        {c.ehImovel ? 'Contrato Imóvel / Construtora' : 'Dívida Futura'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 mt-0.5">
+                      Contrato Total: <strong className="text-zinc-200">R$ {formatMoney(c.valorTotal, hideValues)}</strong>
+                      {c.previsaoStr ? ` • Chaves/Fim: ${c.previsaoStr}` : ''}
+                    </p>
+                    {c.razaoSocial && (
+                      <p className="text-[10px] text-emerald-400/90 mt-0.5">
+                        ⚡ Auto-baixa vinculada à Razão Social: &quot;{c.razaoSocial}&quot;
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => onEditarDividaFutura(c)}
+                      className="p-1.5 bg-[#121318] rounded-lg text-zinc-400 hover:text-white"
+                      title="Editar contrato"
+                    >
+                      <Edit size={13} />
+                    </button>
+                    <button
+                      onClick={() => onExcluirDividaFutura(c.id)}
+                      className="p-1.5 bg-[#121318] rounded-lg text-zinc-400 hover:text-rose-400"
+                      title="Remover contrato"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Barra de Progresso do Contrato */}
+                <div>
+                  <div className="flex justify-between text-[11px] mb-1">
+                    <span className="text-zinc-400">
+                      Progresso quitado ({c.percQuitado.toFixed(1)}%)
+                    </span>
+                    <span className="text-zinc-300 font-medium">
+                      {c.parcelasRestantes > 0 ? `Faltam ${c.parcelasRestantes} parcelas` : `${c.parcelasPagasNoApp} parcelas quitadas no app`}
+                    </span>
+                  </div>
+                  <div className="h-2.5 w-full bg-[#0d0e13] rounded-full overflow-hidden border border-[#252834]">
+                    <div
+                      style={{ width: `${c.percQuitado}%` }}
+                      className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 transition-all duration-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-1 text-xs">
+                  <div className="bg-[#121318] p-2.5 rounded-lg border border-[#1f2128]">
+                    <span className="text-[10px] text-zinc-400 block">Já Quitado (Sinal + Parcelas)</span>
+                    <span className="font-semibold text-emerald-400 tabular-nums">
+                      R$ {formatMoney(c.totalQuitado, hideValues)}
+                    </span>
+                  </div>
+                  <div className="bg-[#121318] p-2.5 rounded-lg border border-[#1f2128] text-right">
+                    <span className="text-[10px] text-zinc-400 block">
+                      {c.ehImovel ? 'Falta Pagar p/ Construtora' : 'Saldo Devedor Restante'}
+                    </span>
+                    <span className="font-semibold text-amber-400 tabular-nums">
+                      R$ {formatMoney(c.saldoDevedor, hideValues)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Busca e Filtros de Contas */}
@@ -1914,6 +2309,20 @@ function ContasFixasView({ todosLancamentos, contasDoMes, mesNome, hideValues, o
                     R$ {formatMoney(valor, hideValues)}
                   </p>
                   <div className="flex gap-1.5">
+                    <button
+                      onClick={() => onPredefinirLugar({
+                        linha: i.linha,
+                        dados: i.dados,
+                        termo: desc,
+                        nomeExibicao: desc,
+                        categoria: categoria || 'Contas Fixas',
+                        tipoLancamento: (tipo === 'Parcela Imóvel' || tipo === 'Juros de Obra' || tipo === 'Conta Fixa') ? tipo : 'Padrao'
+                      })}
+                      className="p-2 bg-[#181a20] rounded-lg text-emerald-400 hover:bg-emerald-500/15"
+                      title="Pré-definir este lugar/razão social para próximos pagamentos"
+                    >
+                      <Bookmark size={15}/>
+                    </button>
                     <button onClick={() => onEdit(i)} className="p-2 bg-[#181a20] rounded-lg text-zinc-400 hover:text-white"><Edit size={15}/></button>
                     <button onClick={() => onDelete(i.linha)} className="p-2 bg-[#181a20] rounded-lg text-zinc-400 hover:text-rose-400"><Trash2 size={15}/></button>
                     <button
@@ -2162,7 +2571,7 @@ function DevedoresView({ items, hideValues, onAbrirCliente, onNovoEmprestimo, on
   const listaAparteVisivel = itensAparte
     .filter(i => mostrarConcluidos || safeString(i.dados[9]) !== 'Concluído')
     .sort((a, b) => {
-      const aP = safeString(i.dados[9]) !== 'Concluído';
+      const aP = safeString(a.dados[9]) !== 'Concluído';
       const bP = safeString(b.dados[9]) !== 'Concluído';
       if (aP && !bP) return -1;
       if (!aP && bP) return 1;
@@ -2489,7 +2898,7 @@ function ClienteDossieView({ nome, items, hideValues, onVoltar, onStatusChange, 
 // ==========================================
 // 5. ABA CARTÕES DE CRÉDITO (BUSCA, ORÇAMENTO POR CATEGORIA E FATURAS)
 // ==========================================
-function CartoesView({ items, rendaMes, tetoCartao, hideValues, onNovoGastoCartao, onAbrirImportador, onReplicarFixosCartao, onEdit, onDelete, onStatusChange, onPagarFaturaBanco }) {
+function CartoesView({ items, rendaMes, tetoCartao, hideValues, onNovoGastoCartao, onAbrirImportador, onReplicarFixosCartao, onEdit, onDelete, onStatusChange, onPagarFaturaBanco, onPredefinirLugar, onAbrirRegrasLugares }) {
   const [busca, setBusca] = useState('');
 
   const itensFiltrados = items.filter(i => {
@@ -2538,11 +2947,18 @@ function CartoesView({ items, rendaMes, tetoCartao, hideValues, onNovoGastoCarta
           </div>
           <div className="flex gap-1.5">
             <button
+              onClick={onAbrirRegrasLugares}
+              className="bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/30 text-emerald-400 px-2.5 py-2 rounded-xl text-[11px] font-semibold flex items-center gap-1"
+              title="Gerenciar lugares pré-definidos (ex: Bar do Nelson -> Fastfood)"
+            >
+              <Bookmark size={12} /> Lugares
+            </button>
+            <button
               onClick={onAbrirImportador}
               className="bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/30 text-emerald-400 px-2.5 py-2 rounded-xl text-[11px] font-semibold"
               title="Importar OFX, CSV ou Automação"
             >
-              Importar OFX/CSV
+              OFX/CSV
             </button>
             <button
               onClick={onReplicarFixosCartao}
@@ -2667,6 +3083,20 @@ function CartoesView({ items, rendaMes, tetoCartao, hideValues, onNovoGastoCarta
                           R$ {formatMoney(parseCurrency(i.dados[7]), hideValues)}
                         </p>
                         <div className="flex gap-1">
+                          <button
+                            onClick={() => onPredefinirLugar({
+                              linha: i.linha,
+                              dados: i.dados,
+                              termo: safeString(i.dados[8]).replace(/\s*\(\d+\/\d+\)\s*$/, ''),
+                              nomeExibicao: safeString(i.dados[8]).replace(/\s*\(\d+\/\d+\)\s*$/, ''),
+                              categoria: safeString(i.dados[9]) || 'Fastfood',
+                              tipoLancamento: 'Padrao'
+                            })}
+                            className="p-1.5 bg-[#181a20] rounded-lg text-emerald-400 hover:bg-emerald-500/15"
+                            title="Pré-definir este lugar para próximos gastos (Pix e Cartão)"
+                          >
+                            <Bookmark size={14}/>
+                          </button>
                           <button onClick={() => onEdit(i)} className="p-1.5 bg-[#181a20] rounded-lg text-zinc-400 hover:text-white"><Edit size={14}/></button>
                           <button onClick={() => onDelete(i.linha)} className="p-1.5 bg-[#181a20] rounded-lg text-zinc-400 hover:text-rose-400"><Trash2 size={14}/></button>
                           <button onClick={() => onStatusChange(i, isPago ? 'Pendente' : 'Pago')} className={`p-1.5 rounded-lg ${isPago ? 'bg-emerald-500/15 text-emerald-400' : 'bg-[#181a20] text-zinc-400'}`}>
@@ -2962,7 +3392,8 @@ function RolagemModal({ item, totalAtual, onClose, onSave }) {
 // ==========================================
 function LancamentoModal({
   tipo, setTipo, onClose, onSave, onSaveLote, meusBancos, infoBancos, cdiMensal,
-  editItem, resgateAtivoTipo, devedorPreSelecionado, subtipoContaPre, nomesClientes, setCustomDialog
+  editItem, resgateAtivoTipo, devedorPreSelecionado, subtipoContaPre, nomesClientes, setCustomDialog,
+  regrasLugares = [], onSaveRegraRapida
 }) {
   const hojeISO = new Date().toISOString().split('T')[0];
   const bancoInicial = meusBancos[0] || 'Dinheiro';
@@ -2989,7 +3420,8 @@ function LancamentoModal({
     isFixo: false,
     parcelas: 1,
     mesesRepetirConta: 1,
-    categoria: ''
+    categoria: '',
+    salvarRegraLugar: false
   });
   
   useEffect(() => {
@@ -3133,6 +3565,20 @@ function LancamentoModal({
             const vBR = formData.dataVenc ? formData.dataVenc.split('-').reverse().join('/') : "";
             let p = [];
             let aba = "";
+
+            if ((tipo === 'conta_fixa' || tipo === 'cartao') && formData.salvarRegraLugar && onSaveRegraRapida && formData.nome.trim()) {
+              onSaveRegraRapida({
+                id: `reg_${Date.now()}`,
+                termo: formData.nome.toLowerCase().trim(),
+                nomeExibicao: formData.nome.trim(),
+                categoria: safeString(formData.categoria) || (tipo === 'conta_fixa' ? 'Contas Fixas' : 'Fastfood'),
+                tipoLancamento:
+                  tipo === 'conta_fixa' &&
+                  (formData.subTipoConta === 'Parcela Imóvel' || formData.subTipoConta === 'Juros de Obra' || formData.subTipoConta === 'Conta Fixa')
+                    ? formData.subTipoConta
+                    : 'Padrao'
+              });
+            }
 
             if (tipo === 'conta_fixa') {
               aba = 'bdLancamentos';
@@ -3280,13 +3726,22 @@ function LancamentoModal({
 
                 <input
                   type="text"
-                  placeholder="Descrição (ex: Juros de Obra Caixa, Parcela Construtora, Condomínio)"
+                  placeholder="Descrição ou Razão Social (ex: Opea Seguros, Juros de Obra, Bar do Nelson)"
                   value={formData.nome}
                   className={inputClass}
                   onChange={e => {
                     const txt = e.target.value;
-                    const catDetectada = detectarCategoriaAuto(txt);
-                    setFormData(p => ({ ...p, nome: txt, categoria: catDetectada || p.categoria }));
+                    const regraHit = aplicarRegraLugarNoTexto(txt, regrasLugares);
+                    const catDetectada = detectarCategoriaAuto(txt, regrasLugares);
+                    setFormData(p => ({
+                      ...p,
+                      nome: txt,
+                      categoria: (regraHit?.categoria || catDetectada) || p.categoria,
+                      subTipoConta:
+                        regraHit?.tipoLancamento && regraHit.tipoLancamento !== 'Padrao'
+                          ? regraHit.tipoLancamento
+                          : p.subTipoConta
+                    }));
                   }}
                   required
                 />
@@ -3295,6 +3750,17 @@ function LancamentoModal({
                   <input type="number" step="any" placeholder="Valor R$ *" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
                   <input type="text" placeholder="Categoria (ex: Imóvel / Obra)" value={formData.categoria} className={inputClass} onChange={e => setFormData({...formData, categoria: e.target.value})} required />
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => setFormData(p => ({ ...p, salvarRegraLugar: !p.salvarRegraLugar }))}
+                  className={`w-full py-2.5 px-3 rounded-xl font-medium text-xs border transition-all flex items-center justify-center gap-1.5 ${formData.salvarRegraLugar ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400' : 'bg-[#0d0e13] border-[#1f2128] text-zinc-400'}`}
+                >
+                  <Bookmark size={13} />
+                  {formData.salvarRegraLugar
+                    ? '✓ Lugar será salvo como regra fixa para próximas vezes'
+                    : 'Pré-salvar este lugar/razão social para próximos gastos?'}
+                </button>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-[#0d0e13] p-3 rounded-xl border border-[#1f2128]">
@@ -3340,20 +3806,32 @@ function LancamentoModal({
               <>
                 <input
                   type="text"
-                  placeholder="Estabelecimento ou Descrição (Autocategoriza ao digitar)"
+                  placeholder="Estabelecimento ou Razão Social (ex: Bar do Nelson)"
                   value={formData.nome}
                   className={inputClass}
                   onChange={e => {
                     const txt = e.target.value;
-                    const catDetectada = detectarCategoriaAuto(txt);
-                    setFormData(p => ({ ...p, nome: txt, categoria: catDetectada || p.categoria }));
+                    const regraHit = aplicarRegraLugarNoTexto(txt, regrasLugares);
+                    const catDetectada = detectarCategoriaAuto(txt, regrasLugares);
+                    setFormData(p => ({ ...p, nome: txt, categoria: (regraHit?.categoria || catDetectada) || p.categoria }));
                   }}
                   required
                 />
                 <div className="grid grid-cols-2 gap-3">
                   <input type="number" step="any" placeholder="Valor Total R$" value={formData.valor} className={inputClass} onChange={e => setFormData({...formData, valor: e.target.value})} required />
-                  <input type="text" placeholder="Categoria (ex: Alimentação)" value={formData.categoria} className={inputClass} onChange={e => setFormData({...formData, categoria: e.target.value})} required />
+                  <input type="text" placeholder="Categoria (ex: Fastfood)" value={formData.categoria} className={inputClass} onChange={e => setFormData({...formData, categoria: e.target.value})} required />
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => setFormData(p => ({ ...p, salvarRegraLugar: !p.salvarRegraLugar }))}
+                  className={`w-full py-2.5 px-3 rounded-xl font-medium text-xs border transition-all flex items-center justify-center gap-1.5 ${formData.salvarRegraLugar ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400' : 'bg-[#0d0e13] border-[#1f2128] text-zinc-400'}`}
+                >
+                  <Bookmark size={13} />
+                  {formData.salvarRegraLugar
+                    ? '✓ Lugar será pré-salvo (Pix e Cartão cairão direto nesta categoria)'
+                    : 'Pré-salvar este lugar para próximos gastos (Pix e Cartão)?'}
+                </button>
                 <div className="grid grid-cols-2 gap-3">
                   <select className={inputClass} value={formData.banco} onChange={e => handleBancoOuDataCompraChange(e.target.value, formData.data)}>
                     {meusBancos.map((b, i) => <option key={i} value={b} className="bg-zinc-900">{b}</option>)}

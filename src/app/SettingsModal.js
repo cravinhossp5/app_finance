@@ -3,35 +3,59 @@
 import { useState } from 'react';
 import {
   X, Sun, Moon, ShieldCheck, CreditCard, Upload, Cpu, Download, Plus, Trash2,
-  CheckCircle, Copy, Send, Smartphone, FileText, Sparkles, Lock, User, Target
+  CheckCircle, Copy, Send, Smartphone, Sparkles, Lock, User, Target, Bookmark, Building2, Edit
 } from 'lucide-react';
 
 // =========================================================
-// MOTOR DE AUTOCATEGORIZAÇÃO (CLIENTE & IMPORTADOR)
+// MOTOR DE AUTOCATEGORIZAÇÃO (COM REGRAS PERSONALIZADAS)
 // =========================================================
-export function detectarCategoriaAuto(texto) {
-  const t = String(texto || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  if (!t || t.length < 3) return "";
+export function detectarCategoriaAuto(texto, regrasPersonalizadas = []) {
+  const t = String(texto || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  if (!t || t.length < 2) return "";
+
+  // 1. Prioriza lugares / razões sociais cadastradas pelo usuário
+  if (Array.isArray(regrasPersonalizadas)) {
+    for (let i = 0; i < regrasPersonalizadas.length; i++) {
+      const r = regrasPersonalizadas[i];
+      const termo = String(r.termo || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+      if (termo && t.includes(termo)) {
+        return r.categoria || "Geral";
+      }
+    }
+  }
+
+  // 2. Regras gerais padrão
+  if (/opea seguros|juros de obra|evolucao de obra|construtora|apartamento|condominio|incc|financiamento|iptu/.test(t)) return "Imóvel / Obra";
+  if (/bar do nelson|ifood|ifd\*|rappi|ze delivery|burger|mcdonald|bk |lanchonete|fastfood|fast food|pizzaria|acai/.test(t)) return "Fastfood";
   if (/uber|99app|99\*|99 pop|posto|combustivel|gasolina|etanol|shell|ipiranga|petrobras|estacionamento|sem parar|veloe|pedagio|onibus|metro/.test(t)) return "Transporte";
-  if (/ifood|ifd\*|rappi|ze delivery|restaurante|lanchonete|padaria|panificadora|burger|mcdonald|bk |outback|pizzaria|acai|cafe|bar |churrascaria|sushi|doceria/.test(t)) return "Alimentação";
+  if (/restaurante|padaria|panificadora|outback|cafe|bar |churrascaria|sushi|doceria/.test(t)) return "Alimentação";
   if (/mercado|supermercado|atacadao|assai|carrefour|pao de acucar|extra|hortifruti|acougue|sacolao/.test(t)) return "Supermercado";
   if (/netflix|spotify|amazon prime|prime video|disney|hbo|max|youtube|google|apple\.com|icloud|chatgpt|openai|claude|internet|vivo|claro|tim|oi /.test(t)) return "Assinaturas";
   if (/drogaria|farmacia|drogasil|raia|pacheco|pague menos|panvel|hospital|clinica|medico|laboratorio|exame|dentista|academia|smartfit|gympass|wellhub/.test(t)) return "Saúde";
-  if (/juros de obra|evolucao de obra|construtora|apartamento|condominio|incc|financiamento|iptu/.test(t)) return "Imóvel / Obra";
   if (/energia|eletrica|enel|cpfl|cemig|light|neoenergia|equatorial|sabesp|saneago|copasa|agua|gas|aluguel/.test(t)) return "Moradia";
   if (/mercadolivre|mercado livre|shopee|amazon|magalu|magazine|shein|aliexpress|casas bahia|americanas|cinema|ingresso|shopping|zara|renner|riachuelo|cea/.test(t)) return "Compras & Lazer";
   return "";
 }
 
+export function aplicarRegraLugarNoTexto(texto, regrasPersonalizadas = []) {
+  const t = String(texto || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  if (!t || !Array.isArray(regrasPersonalizadas)) return null;
+  for (let i = 0; i < regrasPersonalizadas.length; i++) {
+    const r = regrasPersonalizadas[i];
+    const termo = String(r.termo || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+    if (termo && t.includes(termo)) return r;
+  }
+  return null;
+}
+
 // =========================================================
 // PARSER UNIVERSAL DE FATURAS E EXTRATOS (OFX, CSV E TEXTO)
 // =========================================================
-export function parseExtratoOuFatura(rawText) {
+export function parseExtratoOuFatura(rawText, regrasPersonalizadas = []) {
   const text = String(rawText || "").trim();
   if (!text) return [];
   const resultados = [];
 
-  // 1. Verifica se é formato OFX (<STMTTRN>)
   if (text.toUpperCase().includes("<STMTTRN>")) {
     const blocos = text.split(/<STMTTRN>/i).slice(1);
     blocos.forEach((b, idx) => {
@@ -41,9 +65,8 @@ export function parseExtratoOuFatura(rawText) {
 
       if (amtMatch && memoMatch) {
         let val = parseFloat(amtMatch[1].replace(',', '.'));
-        const desc = memoMatch[1].trim();
-        // Ignora pagamentos de fatura recebidos
-        if (desc.toLowerCase().includes("pagamento recebido") || desc.toLowerCase().includes("pagamento de fatura")) return;
+        const descRaw = memoMatch[1].trim();
+        if (descRaw.toLowerCase().includes("pagamento recebido") || descRaw.toLowerCase().includes("pagamento de fatura")) return;
         val = Math.abs(val);
         if (val > 0) {
           let dataCompra = "";
@@ -51,12 +74,13 @@ export function parseExtratoOuFatura(rawText) {
             const d = dtMatch[1];
             dataCompra = `${d.slice(6, 8)}/${d.slice(4, 6)}/${d.slice(0, 4)}`;
           }
+          const regra = aplicarRegraLugarNoTexto(descRaw, regrasPersonalizadas);
           resultados.push({
             id: idx,
             selecionado: true,
-            descricao: desc,
+            descricao: regra?.nomeExibicao || descRaw,
             valor: Number(val.toFixed(2)),
-            categoria: detectarCategoriaAuto(desc) || "Geral",
+            categoria: regra?.categoria || detectarCategoriaAuto(descRaw, regrasPersonalizadas) || "Geral",
             dataCompra
           });
         }
@@ -65,14 +89,11 @@ export function parseExtratoOuFatura(rawText) {
     return resultados;
   }
 
-  // 2. Linhas de CSV ou Texto Copiado da Fatura
   const linhas = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   linhas.forEach((linha, idx) => {
     const lower = linha.toLowerCase();
-    // Ignora cabeçalhos de CSV e linhas de pagamento de fatura
     if (lower.startsWith("date,") || lower.startsWith("data;") || lower.startsWith("data,") || lower.includes("pagamento recebido")) return;
 
-    // Formato CSV Nubank: 2026-11-10,transporte,Uber *Trip,45.90 ou 2026-11-10,Uber,45.90
     const csvPartes = linha.includes(';') ? linha.split(';') : linha.split(',');
     if (csvPartes.length >= 3) {
       const possivelValorStr = csvPartes[csvPartes.length - 1].replace(/[R$\s"]/g, '').trim();
@@ -89,15 +110,16 @@ export function parseExtratoOuFatura(rawText) {
         } else if (/^\d{2}\/\d{2}/.test(rawDate)) {
           dataCompra = rawDate;
         }
-        const desc = csvPartes.length >= 4 ? csvPartes[2].replace(/"/g, '').trim() : csvPartes[1].replace(/"/g, '').trim();
+        const descRaw = csvPartes.length >= 4 ? csvPartes[2].replace(/"/g, '').trim() : csvPartes[1].replace(/"/g, '').trim();
         const catCSV = csvPartes.length >= 4 ? csvPartes[1].replace(/"/g, '').trim() : "";
-        if (desc) {
+        if (descRaw) {
+          const regra = aplicarRegraLugarNoTexto(descRaw, regrasPersonalizadas);
           resultados.push({
             id: idx,
             selecionado: true,
-            descricao: desc,
+            descricao: regra?.nomeExibicao || descRaw,
             valor: Number(Math.abs(num).toFixed(2)),
-            categoria: detectarCategoriaAuto(desc) || catCSV || "Geral",
+            categoria: regra?.categoria || detectarCategoriaAuto(descRaw, regrasPersonalizadas) || catCSV || "Geral",
             dataCompra
           });
           return;
@@ -105,7 +127,6 @@ export function parseExtratoOuFatura(rawText) {
       }
     }
 
-    // Formato Texto Livre / PDF Copiado: "12/11 UBER *TRIP R$ 45,90" ou "IFOOD 67,90"
     const matchVal = linha.match(/(?:R\$\s*)?([0-9.]+,[0-9]{2}|[0-9]+\.[0-9]{2})\s*$/i);
     if (matchVal) {
       let vStr = matchVal[1];
@@ -121,13 +142,14 @@ export function parseExtratoOuFatura(rawText) {
           dataCompra = matchData[1];
           resto = resto.slice(matchData[0].length).trim();
         }
-        const desc = resto.replace(/^[-•*]\s*/, '').trim() || "Compra Importada";
+        const descRaw = resto.replace(/^[-•*]\s*/, '').trim() || "Compra Importada";
+        const regra = aplicarRegraLugarNoTexto(descRaw, regrasPersonalizadas);
         resultados.push({
           id: idx,
           selecionado: true,
-          descricao: desc,
+          descricao: regra?.nomeExibicao || descRaw,
           valor: Number(valor.toFixed(2)),
-          categoria: detectarCategoriaAuto(desc) || "Geral",
+          categoria: regra?.categoria || detectarCategoriaAuto(descRaw, regrasPersonalizadas) || "Geral",
           dataCompra
         });
       }
@@ -138,10 +160,340 @@ export function parseExtratoOuFatura(rawText) {
 }
 
 // =========================================================
+// MODAL RÁPIDO PARA PRÉ-DEFINIR UM LUGAR / RAZÃO SOCIAL
+// =========================================================
+export function RegraLugarRapidaModal({ itemInicial, dividasFuturas = [], onClose, onSaveRegra }) {
+  const [termo, setTermo] = useState(itemInicial?.termo || '');
+  const [nomeExibicao, setNomeExibicao] = useState(itemInicial?.nomeExibicao || '');
+  const [categoria, setCategoria] = useState(itemInicial?.categoria || 'Fastfood');
+  const [tipoLancamento, setTipoLancamento] = useState(itemInicial?.tipoLancamento || 'Padrao');
+  const [dividaId, setDividaId] = useState(itemInicial?.dividaId || '');
+
+  const inputCls = "w-full bg-[#181a20] border border-[#272a34] rounded-xl p-3 text-xs font-medium text-zinc-100 outline-none focus:border-emerald-500/50";
+
+  return (
+    <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-[310] flex items-center justify-center p-4">
+      <div className="bg-[#121318] border border-[#1f2128] rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4">
+        <div className="flex justify-between items-center border-b border-[#1f2128] pb-3">
+          <div>
+            <h3 className="text-sm font-semibold text-zinc-100">Pré-definir Lugar ou Razão Social</h3>
+            <p className="text-[11px] text-zinc-400">Sempre que aparecer no Pix, Boleto ou Cartão, o app reconhecerá sozinho</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg bg-[#181a20] text-zinc-400"><X size={17}/></button>
+        </div>
+
+        <form
+          className="space-y-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!termo.trim()) return;
+            onSaveRegra({
+              id: itemInicial?.id || `regra_${Date.now()}`,
+              termo: termo.trim(),
+              nomeExibicao: nomeExibicao.trim() || termo.trim(),
+              categoria: categoria.trim() || 'Geral',
+              tipoLancamento,
+              dividaId
+            });
+          }}
+        >
+          <div>
+            <label className="text-[11px] text-zinc-400 block mb-1">Como aparece na notificação do banco / Razão Social *</label>
+            <input
+              type="text"
+              placeholder="Ex: opea seguros, bar do nelson, pag*nelson"
+              value={termo}
+              onChange={e => setTermo(e.target.value)}
+              className={inputCls}
+              required
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[11px] text-zinc-400 block mb-1">Nome limpo no App *</label>
+              <input
+                type="text"
+                placeholder="Ex: Parcela Apartamento, Bar do Nelson"
+                value={nomeExibicao}
+                onChange={e => setNomeExibicao(e.target.value)}
+                className={inputCls}
+                required
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-zinc-400 block mb-1">Categoria Automática *</label>
+              <input
+                type="text"
+                placeholder="Ex: Fastfood, Imóvel / Obra"
+                value={categoria}
+                onChange={e => setCategoria(e.target.value)}
+                className={inputCls}
+                required
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[11px] text-zinc-400 block mb-1">Comportamento quando você pagar para este lugar</label>
+            <select
+              value={tipoLancamento}
+              onChange={e => {
+                const v = e.target.value;
+                setTipoLancamento(v);
+                if (v === 'Parcela Imóvel' || v === 'Juros de Obra') setCategoria('Imóvel / Obra');
+              }}
+              className={inputCls}
+            >
+              <option value="Padrao">Gasto Normal (Funciona p/ Pix, Débito e Cartão de Crédito)</option>
+              <option value="Parcela Imóvel">Quitar Parcela do Apartamento (Abate do Saldo Devedor)</option>
+              <option value="Juros de Obra">Lançar como Juros de Obra (Não abate do Saldo do Apto)</option>
+              <option value="Conta Fixa">Quitar Conta Fixa / Outra Dívida Futura</option>
+            </select>
+          </div>
+
+          {(tipoLancamento === 'Parcela Imóvel' || tipoLancamento === 'Conta Fixa') && dividasFuturas.length > 0 && (
+            <div>
+              <label className="text-[11px] text-zinc-400 block mb-1">Vincular a qual Contrato / Dívida Futura?</label>
+              <select value={dividaId} onChange={e => setDividaId(e.target.value)} className={inputCls}>
+                <option value="">Abater automaticamente pelo nome/tipo</option>
+                {dividasFuturas.map(d => (
+                  <option key={d.id} value={d.id}>{d.nome}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="flex gap-2.5 pt-2">
+            <button type="button" onClick={onClose} className="flex-1 py-3 rounded-xl bg-[#181a20] text-zinc-300 text-xs font-medium">
+              Cancelar
+            </button>
+            <button type="submit" className="flex-1 py-3 rounded-xl bg-emerald-600 text-white text-xs font-semibold">
+              Salvar Lugar Pré-definido
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// =========================================================
+// MODAL PARA CADASTRAR / EDITAR DÍVIDA FUTURA OU CONTRATO DO APTO
+// =========================================================
+export function DividaFuturaModal({ itemInicial, onClose, onSaveDivida, onGerarParcelasPlanilha }) {
+  const [nome, setNome] = useState(itemInicial?.nome || 'Entrada / Construtora Apartamento');
+  const [ehImovel, setEhImovel] = useState(itemInicial ? Boolean(itemInicial.ehImovel) : true);
+  const [valorTotal, setValorTotal] = useState(itemInicial?.valorTotal || '');
+  const [valorJaPagoAntes, setValorJaPagoAntes] = useState(itemInicial?.valorJaPagoAntes || 0);
+  const [qtdParcelasTotal, setQtdParcelasTotal] = useState(itemInicial?.qtdParcelasTotal || 36);
+  const [valorParcelaPadrao, setValorParcelaPadrao] = useState(itemInicial?.valorParcelaPadrao || '');
+  const [diaVencimento, setDiaVencimento] = useState(itemInicial?.diaVencimento || 15);
+  const [previsaoTermino, setPrevisaoTermino] = useState(itemInicial?.previsaoTermino || 'Dez/2027');
+  const [razaoSocial, setRazaoSocial] = useState(itemInicial?.razaoSocial || 'opea seguros');
+  const [agendarParcelasAgora, setAgendarParcelasAgora] = useState(false);
+  const [qtdAgendar, setQtdAgendar] = useState(12);
+
+  const inputCls = "w-full bg-[#181a20] border border-[#272a34] rounded-xl p-3 text-xs font-medium text-zinc-100 outline-none focus:border-emerald-500/50";
+
+  return (
+    <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-[310] flex items-center justify-center p-4">
+      <div className="bg-[#121318] border border-[#1f2128] rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+        <div className="flex justify-between items-center border-b border-[#1f2128] pb-3">
+          <div>
+            <h3 className="text-sm font-semibold text-zinc-100">
+              {itemInicial ? 'Editar Contrato / Dívida Futura' : 'Cadastrar Contrato ou Dívida Futura'}
+            </h3>
+            <p className="text-[11px] text-zinc-400">Acompanhe o saldo devedor total e abata parcelas automaticamente</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg bg-[#181a20] text-zinc-400"><X size={17}/></button>
+        </div>
+
+        <form
+          className="space-y-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const novaDivida = {
+              id: itemInicial?.id || (ehImovel ? 'contrato_apto' : `divida_${Date.now()}`),
+              nome: nome.trim(),
+              ehImovel,
+              valorTotal: parseFloat(String(valorTotal).replace(',', '.')) || 0,
+              valorJaPagoAntes: parseFloat(String(valorJaPagoAntes).replace(',', '.')) || 0,
+              qtdParcelasTotal: parseInt(qtdParcelasTotal, 10) || 1,
+              valorParcelaPadrao: parseFloat(String(valorParcelaPadrao).replace(',', '.')) || 0,
+              diaVencimento: parseInt(diaVencimento, 10) || 10,
+              previsaoTermino: previsaoTermino.trim(),
+              razaoSocial: razaoSocial.trim()
+            };
+            onSaveDivida(novaDivida, agendarParcelasAgora ? (parseInt(qtdAgendar, 10) || 0) : 0);
+          }}
+        >
+          <div className="grid grid-cols-2 gap-1.5 bg-[#0d0e13] p-1.5 rounded-xl border border-[#1f2128]">
+            <button
+              type="button"
+              onClick={() => setEhImovel(true)}
+              className={`py-2 rounded-lg text-xs font-semibold transition-all ${ehImovel ? 'bg-emerald-600 text-white' : 'text-zinc-400'}`}
+            >
+              Imóvel / Apartamento
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEhImovel(false);
+                if (nome === 'Entrada / Construtora Apartamento') setNome('');
+                if (razaoSocial === 'opea seguros') setRazaoSocial('');
+              }}
+              className={`py-2 rounded-lg text-xs font-semibold transition-all ${!ehImovel ? 'bg-emerald-600 text-white' : 'text-zinc-400'}`}
+            >
+              Outra Dívida Futura
+            </button>
+          </div>
+
+          <div>
+            <label className="text-[11px] text-zinc-400 block mb-1">Nome do Contrato / Dívida *</label>
+            <input
+              type="text"
+              placeholder="Ex: Construtora Apartamento, Financiamento, Móveis"
+              value={nome}
+              onChange={e => setNome(e.target.value)}
+              className={inputCls}
+              required
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[11px] text-zinc-400 block mb-1">Valor Total Contrato (R$) *</label>
+              <input
+                type="number"
+                step="any"
+                placeholder="Ex: 45000"
+                value={valorTotal}
+                onChange={e => setValorTotal(e.target.value)}
+                className={inputCls}
+                required
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-zinc-400 block mb-1">Já Pago Antes do App (R$)</label>
+              <input
+                type="number"
+                step="any"
+                placeholder="Ex: 12000"
+                value={valorJaPagoAntes}
+                onChange={e => setValorJaPagoAntes(e.target.value)}
+                className={inputCls}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="text-[11px] text-zinc-400 block mb-1">Total Parcelas</label>
+              <input
+                type="number"
+                value={qtdParcelasTotal}
+                onChange={e => setQtdParcelasTotal(e.target.value)}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-zinc-400 block mb-1">Dia Venc.</label>
+              <input
+                type="number"
+                min={1}
+                max={31}
+                value={diaVencimento}
+                onChange={e => setDiaVencimento(e.target.value)}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-zinc-400 block mb-1">{ehImovel ? 'Entrega Chaves' : 'Término'}</label>
+              <input
+                type="text"
+                placeholder="Ex: Dez/2027"
+                value={previsaoTermino}
+                onChange={e => setPrevisaoTermino(e.target.value)}
+                className={inputCls}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[11px] text-zinc-400 block mb-1">Valor Médio Parcela (R$)</label>
+              <input
+                type="number"
+                step="any"
+                placeholder="Ex: 1250"
+                value={valorParcelaPadrao}
+                onChange={e => setValorParcelaPadrao(e.target.value)}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-zinc-400 block mb-1">Razão Social p/ Baixa Auto</label>
+              <input
+                type="text"
+                placeholder="Ex: opea seguros"
+                value={razaoSocial}
+                onChange={e => setRazaoSocial(e.target.value)}
+                className={inputCls}
+              />
+            </div>
+          </div>
+          <p className="text-[10px] text-zinc-500">
+            Sempre que você pagar um Pix ou Boleto para a Razão Social acima (ex: <strong>opea seguros LTDA</strong>), o app dará baixa na parcela e abaterá o valor do saldo devedor automaticamente.
+          </p>
+
+          {!itemInicial && (
+            <div className="bg-[#0d0e13] border border-[#1f2128] rounded-xl p-3 space-y-2">
+              <button
+                type="button"
+                onClick={() => setAgendarParcelasAgora(!agendarParcelasAgora)}
+                className="w-full flex justify-between items-center text-xs font-medium text-zinc-300"
+              >
+                <span>Gerar parcelas futuras na planilha agora?</span>
+                <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${agendarParcelasAgora ? 'bg-emerald-600 text-white' : 'bg-[#181a20] text-zinc-400'}`}>
+                  {agendarParcelasAgora ? 'Sim' : 'Não'}
+                </span>
+              </button>
+              {agendarParcelasAgora && (
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[11px] text-zinc-400">Quantos meses agendar:</span>
+                  <select
+                    value={qtdAgendar}
+                    onChange={e => setQtdAgendar(e.target.value)}
+                    className="bg-[#181a20] border border-[#272a34] rounded-lg px-2.5 py-1 text-xs text-emerald-400 font-semibold"
+                  >
+                    {[3, 6, 12, 18, 24, 36].map(n => <option key={n} value={n}>{n} meses</option>)}
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex gap-2.5 pt-2">
+            <button type="button" onClick={onClose} className="flex-1 py-3 rounded-xl bg-[#181a20] text-zinc-300 text-xs font-medium">
+              Cancelar
+            </button>
+            <button type="submit" className="flex-1 py-3 rounded-xl bg-emerald-600 text-white text-xs font-semibold">
+              Salvar Contrato
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// =========================================================
 // MODAL COMPLETO DE CONFIGURAÇÕES E AUTOMAÇÃO 100%
 // =========================================================
 export default function SettingsModal({
   onClose,
+  abaInicialModal = 'geral',
   theme,
   onToggleTheme,
   settings,
@@ -153,15 +505,17 @@ export default function SettingsModal({
   onAddBanco,
   onDeleteBanco,
   meusBancos,
+  regrasLugares = [],
+  onSaveRegrasLugares,
+  dividasFuturas = [],
   onImportarLoteCartao,
   onProcessarNotificacaoAuto,
   onDispararTelegram,
   onExportBackup,
   showToast
 }) {
-  const [abaAtiva, setAbaAtiva] = useState('geral'); // 'geral', 'bancos', 'importar', 'automacao', 'seguranca'
+  const [abaAtiva, setAbaAtiva] = useState(abaInicialModal || 'geral');
 
-  // Estados de Perfil, Limites e Preferências
   const [formConfig, setFormConfig] = useState({
     titular: settings.titular || 'Private',
     chavePix: settings.chavePix || '',
@@ -172,22 +526,25 @@ export default function SettingsModal({
     abaInicial: settings.abaInicial || 'dashboard'
   });
 
+  // Estados de Novo Lugar / Razão Social
+  const [novoTermo, setNovoTermo] = useState('');
+  const [novoNomeExib, setNovoNomeExib] = useState('');
+  const [novaCatLugar, setNovaCatLugar] = useState('');
+  const [novoTipoLugar, setNovoTipoLugar] = useState('Padrao');
+
   // Estados de Gerenciamento de Bancos
   const [novoBancoNome, setNovoBancoNome] = useState('');
   const [novoBancoFech, setNovoBancoFech] = useState(3);
   const [novoBancoVenc, setNovoBancoVenc] = useState(10);
 
-  // Estados do Importador de Faturas (OFX / CSV / Texto)
+  // Estados do Importador de Faturas
   const [textoFatura, setTextoFatura] = useState('');
   const [bancoImport, setBancoImport] = useState(meusBancos[0] || 'Nubank');
   const [vencImport, setVencImport] = useState(new Date().toISOString().split('T')[0]);
   const [itensPrevia, setItensPrevia] = useState([]);
 
-  // Estado do Simulador/Lançador por Notificação Inteligente
   const [textoNotifAuto, setTextoNotifAuto] = useState('');
   const [loadingAuto, setLoadingAuto] = useState(false);
-
-  // Estado de PIN
   const [pinTemp, setPinTemp] = useState(savedPin || '');
 
   const handleFileUpload = (e) => {
@@ -197,7 +554,7 @@ export default function SettingsModal({
     reader.onload = (ev) => {
       const content = String(ev.target?.result || '');
       setTextoFatura(content);
-      const parsed = parseExtratoOuFatura(content);
+      const parsed = parseExtratoOuFatura(content, regrasLugares);
       setItensPrevia(parsed);
       if (parsed.length > 0) showToast(`${parsed.length} transações identificadas no arquivo.`);
       else showToast("Nenhuma transação encontrada no arquivo.", "error");
@@ -206,7 +563,7 @@ export default function SettingsModal({
   };
 
   const handleAnalisarTextoFatura = () => {
-    const parsed = parseExtratoOuFatura(textoFatura);
+    const parsed = parseExtratoOuFatura(textoFatura, regrasLugares);
     setItensPrevia(parsed);
     if (parsed.length > 0) showToast(`${parsed.length} lançamentos prontos para importar.`);
     else showToast("Use o formato: 'Descrição 45,90' ou cole um CSV/OFX.", "error");
@@ -237,19 +594,18 @@ export default function SettingsModal({
   return (
     <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-[280] flex items-end md:items-center justify-center p-2 md:p-4">
       <div className="bg-[#121318] border border-[#1f2128] rounded-2xl w-full max-w-lg max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
-        {/* Cabeçalho */}
         <div className="px-5 py-4 border-b border-[#1f2128] flex justify-between items-center">
           <div>
             <h3 className="text-sm font-semibold text-zinc-100">Configurações & Central de Automação</h3>
-            <p className="text-[11px] text-zinc-500">Personalize tema, bancos, limites, Pix e automações</p>
+            <p className="text-[11px] text-zinc-500">Tema, lugares pré-definidos, bancos, limites e automações</p>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg bg-[#181a20] text-zinc-400 hover:text-white"><X size={18}/></button>
         </div>
 
-        {/* Abas de Navegação Interna */}
         <div className="flex gap-1 px-4 pt-3 pb-2 border-b border-[#1f2128] overflow-x-auto no-scrollbar bg-[#0d0e13]">
           {[
             { id: 'geral', label: 'Geral & Tema', icon: <Sun size={13}/> },
+            { id: 'lugares', label: 'Lugares & Regras', icon: <Bookmark size={13}/> },
             { id: 'bancos', label: 'Meus Bancos', icon: <CreditCard size={13}/> },
             { id: 'importar', label: 'Importar Fatura', icon: <Upload size={13}/> },
             { id: 'automacao', label: 'Automação 100%', icon: <Cpu size={13}/> },
@@ -265,12 +621,10 @@ export default function SettingsModal({
           ))}
         </div>
 
-        {/* Corpo Rolável */}
         <div className="p-5 overflow-y-auto space-y-5 flex-1">
-          {/* 1. ABA GERAL, TEMA CLARO/ESCURO, PERFIL E METAS */}
+          {/* 1. ABA GERAL & TEMA */}
           {abaAtiva === 'geral' && (
             <div className="space-y-4">
-              {/* Seletor de Tema Claro / Escuro */}
               <div className="bg-[#16181f] border border-[#222530] rounded-xl p-4">
                 <span className="text-xs font-semibold text-zinc-200 block mb-2.5">Aparência do Aplicativo</span>
                 <div className="grid grid-cols-2 gap-2.5">
@@ -291,7 +645,6 @@ export default function SettingsModal({
                 </div>
               </div>
 
-              {/* Perfil & Chave Pix para Cobranças */}
               <div className="bg-[#16181f] border border-[#222530] rounded-xl p-4 space-y-3">
                 <div className="flex items-center gap-2">
                   <User size={15} className="text-emerald-400"/>
@@ -327,7 +680,6 @@ export default function SettingsModal({
                 </button>
               </div>
 
-              {/* Limites e Metas Financeiras */}
               <div className="bg-[#16181f] border border-[#222530] rounded-xl p-4 space-y-3">
                 <div className="flex items-center gap-2">
                   <Target size={15} className="text-emerald-400"/>
@@ -393,7 +745,111 @@ export default function SettingsModal({
             </div>
           )}
 
-          {/* 2. ABA GERENCIADOR DE BANCOS & CARTÕES (meus_bancos) */}
+          {/* 2. ABA LUGARES & RAZÕES SOCIAIS PRÉ-DEFINIDOS */}
+          {abaAtiva === 'lugares' && (
+            <div className="space-y-4">
+              <div className="bg-[#16181f] border border-[#222530] rounded-xl p-4 space-y-3">
+                <span className="text-xs font-semibold text-zinc-200 block">Pré-definir Novo Lugar ou Razão Social</span>
+                <p className="text-[11px] text-zinc-400 leading-relaxed">
+                  Cadastre o nome ou razão social que aparece na notificação do banco (ex: <strong>opea seguros LTDA</strong> para abater parcela do apartamento, ou <strong>Bar do nelson</strong> para cair como <em>Fastfood</em> tanto no Pix quanto no Cartão).
+                </p>
+
+                <input
+                  type="text"
+                  placeholder="Nome na notificação / Razão Social (ex: opea seguros, bar do nelson)"
+                  value={novoTermo}
+                  onChange={e => setNovoTermo(e.target.value)}
+                  className={inputCls}
+                />
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <input
+                    type="text"
+                    placeholder="Nome limpo (ex: Bar do Nelson)"
+                    value={novoNomeExib}
+                    onChange={e => setNovoNomeExib(e.target.value)}
+                    className={inputCls}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Categoria (ex: Fastfood)"
+                    value={novaCatLugar}
+                    onChange={e => setNovaCatLugar(e.target.value)}
+                    className={inputCls}
+                  />
+                </div>
+
+                <select
+                  value={novoTipoLugar}
+                  onChange={e => {
+                    const v = e.target.value;
+                    setNovoTipoLugar(v);
+                    if (v === 'Parcela Imóvel' || v === 'Juros de Obra') setNovaCatLugar('Imóvel / Obra');
+                  }}
+                  className={inputCls}
+                >
+                  <option value="Padrao">Gasto Normal (Pix, Débito e Cartão de Crédito)</option>
+                  <option value="Parcela Imóvel">Quitar Parcela do Apartamento (Abate do Contrato)</option>
+                  <option value="Juros de Obra">Lançar como Juros de Obra (Não abate do Contrato)</option>
+                  <option value="Conta Fixa">Quitar Conta Fixa / Dívida Futura</option>
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!novoTermo.trim()) return;
+                    const novaRegra = {
+                      id: `regra_${Date.now()}`,
+                      termo: novoTermo.trim(),
+                      nomeExibicao: novoNomeExib.trim() || novoTermo.trim(),
+                      categoria: novaCatLugar.trim() || 'Geral',
+                      tipoLancamento: novoTipoLugar,
+                      dividaId: novoTipoLugar === 'Parcela Imóvel' ? 'contrato_apto' : ''
+                    };
+                    onSaveRegrasLugares([novaRegra, ...regrasLugares]);
+                    setNovoTermo('');
+                    setNovoNomeExib('');
+                    setNovaCatLugar('');
+                  }}
+                  className="w-full py-3 rounded-xl bg-emerald-600 text-white text-xs font-semibold flex items-center justify-center gap-1.5"
+                >
+                  <Plus size={15}/> Salvar Lugar na Nuvem
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <span className="text-xs font-semibold text-zinc-400 block px-1">
+                  Lugares Pré-definidos Ativos ({regrasLugares.length})
+                </span>
+                {regrasLugares.length === 0 ? (
+                  <p className="text-xs text-zinc-500 text-center py-4">Nenhum lugar pré-definido cadastrado.</p>
+                ) : regrasLugares.map((r, idx) => (
+                  <div key={r.id || idx} className="p-3.5 rounded-xl bg-[#16181f] border border-[#222530] flex justify-between items-center">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-zinc-100">{r.nomeExibicao}</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-medium">
+                          {r.categoria}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-zinc-400 mt-0.5">
+                        Detecta: <code className="text-zinc-300">&quot;{r.termo}&quot;</code> • {r.tipoLancamento === 'Padrao' ? 'Pix & Cartão' : r.tipoLancamento}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => onSaveRegrasLugares(regrasLugares.filter((_, i) => i !== idx))}
+                      className="p-2 rounded-lg bg-[#121318] text-zinc-400 hover:text-rose-400"
+                      title="Remover regra"
+                    >
+                      <Trash2 size={15}/>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 3. ABA GERENCIADOR DE BANCOS & CARTÕES */}
           {abaAtiva === 'bancos' && (
             <div className="space-y-4">
               <div className="bg-[#16181f] border border-[#222530] rounded-xl p-4 space-y-3">
@@ -473,13 +929,13 @@ export default function SettingsModal({
             </div>
           )}
 
-          {/* 3. ABA IMPORTADOR DE FATURA (OFX / CSV / TEXTO) */}
+          {/* 4. ABA IMPORTADOR DE FATURA */}
           {abaAtiva === 'importar' && (
             <div className="space-y-4">
               <div className="bg-[#16181f] border border-[#222530] rounded-xl p-4 space-y-3">
                 <span className="text-xs font-semibold text-zinc-200 block">Importação Automática de Fatura (OFX, CSV ou Texto)</span>
                 <p className="text-[11px] text-zinc-400">
-                  Envie o arquivo `.ofx` ou `.csv` exportado do aplicativo do seu banco, ou cole as linhas da fatura abaixo. O sistema categoriza cada compra sozinho.
+                  Envie o arquivo `.ofx` ou `.csv` exportado do aplicativo do seu banco, ou cole as linhas da fatura abaixo. Seus lugares pré-definidos serão aplicados automaticamente.
                 </p>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -502,10 +958,10 @@ export default function SettingsModal({
                 </label>
 
                 <div>
-                  <label className="text-[11px] text-zinc-400 block mb-1">Ou cole o texto da fatura (ex: 12/11 UBER *TRIP 45,90)</label>
+                  <label className="text-[11px] text-zinc-400 block mb-1">Ou cole o texto da fatura (ex: 12/11 BAR DO NELSON 45,90)</label>
                   <textarea
                     rows={4}
-                    placeholder={"10/11 UBER *TRIP 45,90\n11/11 IFOOD *RESTAURANTE 68,50\n12/11 DROGASIL 39,90"}
+                    placeholder={"10/11 BAR DO NELSON 45,90\n11/11 OPEA SEGUROS LTDA 1500,00"}
                     value={textoFatura}
                     onChange={e => setTextoFatura(e.target.value)}
                     className={`${inputCls} font-mono text-[11px]`}
@@ -560,21 +1016,20 @@ export default function SettingsModal({
             </div>
           )}
 
-          {/* 4. ABA AUTOMAÇÃO 100% (CELULAR, BOT TELEGRAM E LANÇADOR INTELIGENTE) */}
+          {/* 5. ABA AUTOMAÇÃO 100% */}
           {abaAtiva === 'automacao' && (
             <div className="space-y-4">
-              {/* Lançador Inteligente por Texto de Notificação */}
               <div className="bg-[#16181f] border border-[#222530] rounded-xl p-4 space-y-3">
                 <div className="flex items-center gap-2">
                   <Sparkles size={15} className="text-emerald-400"/>
-                  <span className="text-xs font-semibold text-zinc-200">Lançamento Inteligente por Frase ou Notificação</span>
+                  <span className="text-xs font-semibold text-zinc-200">Testar / Lançar por Frase ou Notificação</span>
                 </div>
                 <p className="text-[11px] text-zinc-400">
-                  Cole qualquer notificação de banco ou digite uma frase (ex: <em>&quot;Compra aprovada no Nubank de R$ 54,90 em UBER&quot;</em> ou <em>&quot;Pix enviado de R$ 120,00 em Supermercado&quot;</em>).
+                  Teste suas regras de lugares colando uma frase (ex: <em>&quot;Pagamento realizado de R$ 1500,00 para OPEA SEGUROS LTDA&quot;</em> ou <em>&quot;Pix enviado de R$ 45,00 para Bar do Nelson&quot;</em>).
                 </p>
                 <input
                   type="text"
-                  placeholder="Ex: Compra aprovada de R$ 68,90 em IFOOD no cartão Nubank"
+                  placeholder="Ex: Pagamento realizado de R$ 1500,00 para OPEA SEGUROS LTDA"
                   value={textoNotifAuto}
                   onChange={e => setTextoNotifAuto(e.target.value)}
                   className={inputCls}
@@ -594,95 +1049,30 @@ export default function SettingsModal({
                 </button>
               </div>
 
-              {/* Captura Automática das Notificações do Celular (MacroDroid / Atalhos iOS) */}
               <div className="bg-[#16181f] border border-[#222530] rounded-xl p-4 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Smartphone size={15} className="text-emerald-400"/>
-                    <span className="text-xs font-semibold text-zinc-200">1. Automação ao Passar o Cartão (Celular)</span>
+                    <span className="text-xs font-semibold text-zinc-200">Links para o MacroDroid (Android)</span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const modeloJson = JSON.stringify({
-                        action: "auto_notificacao",
-                        app: "{not_app_package}",
-                        titulo: "{not_title}",
-                        texto: "{not_text}"
-                      }, null, 2);
-                      navigator.clipboard?.writeText(modeloJson);
-                      showToast("JSON copiado para a área de transferência!");
-                    }}
-                    className="text-[11px] text-emerald-400 flex items-center gap-1 font-medium"
-                  >
-                    <Copy size={12}/> Copiar JSON
-                  </button>
                 </div>
-                <p className="text-[11px] text-zinc-400 leading-relaxed">
-                  No Android (app gratuito <strong>MacroDroid</strong>) ou iPhone (app <strong>Atalhos</strong> → Automação → Ao usar Carteira/Apple Pay): configure um disparo HTTP POST para <code>{typeof window !== 'undefined' ? `${window.location.origin}/api/proxy` : '/api/proxy'}</code> com o JSON abaixo. Cada compra aprovada cai sozinha na planilha em 2 segundos:
+                <p className="text-[11px] text-zinc-400">
+                  <strong>Link 1 (Capturar Compras, Pix, Boletos e Lugares):</strong>
                 </p>
-                <pre className="bg-[#121318] border border-[#1f2128] p-3 rounded-xl text-[10px] text-emerald-400 overflow-x-auto">
-{`{
-  "action": "auto_notificacao",
-  "app": "{not_app_package}",
-  "titulo": "{not_title}",
-  "texto": "{not_text}"
-}`}
+                <pre className="bg-[#121318] border border-[#1f2128] p-2.5 rounded-xl text-[10px] text-emerald-400 overflow-x-auto">
+{`https://appfinance.cravinhos-sp5.workers.dev/api/proxy?action=macro_compra&app={not_app_package}&titulo={not_title}&texto={notification}`}
                 </pre>
-              </div>
-
-              {/* Bot do Telegram Interativo */}
-              <div className="bg-[#16181f] border border-[#222530] rounded-xl p-4 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Send size={15} className="text-emerald-400"/>
-                    <span className="text-xs font-semibold text-zinc-200">2. Comandos Diretos no seu Bot do Telegram</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={onDispararTelegram}
-                    className="text-[11px] text-emerald-400 font-semibold"
-                  >
-                    Enviar Resumo →
-                  </button>
-                </div>
-                <p className="text-[11px] text-zinc-400 leading-relaxed">
-                  Como seu app roda na <strong>Cloudflare</strong>, clique no botão abaixo para conectar seu Bot do Telegram diretamente ao link da sua Cloudflare (<code>/api/proxy</code>):
+                <p className="text-[11px] text-zinc-400 pt-1">
+                  <strong>Link 2 (Receber Resumo Diário de Vencimentos):</strong>
                 </p>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      const webhookUrl = `${window.location.origin}/api/proxy`;
-                      const res = await fetch('/api/proxy', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'ativar_webhook_telegram', webhookUrl })
-                      });
-                      const json = await res.json();
-                      if (json.success) showToast("Bot do Telegram conectado à sua Cloudflare com sucesso!");
-                      else showToast(json.message || "Falha ao conectar Webhook.", "error");
-                    } catch (_) {
-                      showToast("Erro ao conectar Webhook do Telegram.", "error");
-                    }
-                  }}
-                  className="w-full py-2.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-400 text-xs font-semibold"
-                >
-                  🔗 Ativar Bot Interativo no Link da Cloudflare (1 Clique)
-                </button>
-                <div className="bg-[#121318] border border-[#1f2128] p-3 rounded-xl space-y-1 text-[11px] font-mono text-zinc-300">
-                  <p>• <span className="text-emerald-400">cartao 45,90 Uber Nubank</span> (Lança na fatura)</p>
-                  <p>• <span className="text-emerald-400">pix 120 Supermercado</span> (Lança Pix pago)</p>
-                  <p>• <span className="text-emerald-400">obra 640,50</span> (Lança Juros de Obra)</p>
-                  <p>• <span className="text-emerald-400">apto 1500</span> (Lança Parcela do Apartamento)</p>
-                  <p>• <span className="text-emerald-400">aparte 100 Joao Gasolina</span> (Dívida 0%)</p>
-                  <p>• <span className="text-emerald-400">/resumo</span> (Recebe relatório de vencimentos)</p>
-                </div>
+                <pre className="bg-[#121318] border border-[#1f2128] p-2.5 rounded-xl text-[10px] text-emerald-400 overflow-x-auto">
+{`https://appfinance.cravinhos-sp5.workers.dev/api/proxy?action=macro_resumo`}
+                </pre>
               </div>
             </div>
           )}
 
-          {/* 5. ABA SEGURANÇA (PIN) & BACKUP DE DADOS */}
+          {/* 6. ABA SEGURANÇA & BACKUP */}
           {abaAtiva === 'seguranca' && (
             <div className="space-y-4">
               <div className="bg-[#16181f] border border-[#222530] rounded-xl p-4 space-y-3">
@@ -690,9 +1080,6 @@ export default function SettingsModal({
                   <Lock size={15} className="text-emerald-400"/>
                   <span className="text-xs font-semibold text-zinc-200">Bloqueio de Acesso por PIN (4 dígitos)</span>
                 </div>
-                <p className="text-[11px] text-zinc-400">
-                  Exige sua senha numérica de 4 dígitos sempre que o aplicativo for aberto no celular ou computador.
-                </p>
                 <input
                   type="password"
                   maxLength={4}
@@ -728,9 +1115,6 @@ export default function SettingsModal({
                   <Download size={15} className="text-emerald-400"/>
                   <span className="text-xs font-semibold text-zinc-200">Exportação e Backup Local</span>
                 </div>
-                <p className="text-[11px] text-zinc-400">
-                  Baixe uma cópia completa de todos os seus lançamentos, investimentos, contas fixas e recebíveis para o seu aparelho.
-                </p>
                 <button
                   type="button"
                   onClick={onExportBackup}
