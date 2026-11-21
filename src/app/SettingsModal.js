@@ -282,15 +282,15 @@ export function RegraLugarRapidaModal({ itemInicial, dividasFuturas = [], onClos
 // MODAL PARA CADASTRAR / EDITAR DÍVIDA FUTURA OU CONTRATO DO APTO
 // =========================================================
 export function DividaFuturaModal({ itemInicial, onClose, onSaveDivida, onGerarParcelasPlanilha }) {
-  const [nome, setNome] = useState(itemInicial?.nome || 'Entrada / Construtora Apartamento');
+  const [nome, setNome] = useState(itemInicial?.nome || '');
   const [ehImovel, setEhImovel] = useState(itemInicial ? Boolean(itemInicial.ehImovel) : true);
   const [valorTotal, setValorTotal] = useState(itemInicial?.valorTotal || '');
   const [valorJaPagoAntes, setValorJaPagoAntes] = useState(itemInicial?.valorJaPagoAntes || 0);
   const [qtdParcelasTotal, setQtdParcelasTotal] = useState(itemInicial?.qtdParcelasTotal || 36);
   const [valorParcelaPadrao, setValorParcelaPadrao] = useState(itemInicial?.valorParcelaPadrao || '');
   const [diaVencimento, setDiaVencimento] = useState(itemInicial?.diaVencimento || 15);
-  const [previsaoTermino, setPrevisaoTermino] = useState(itemInicial?.previsaoTermino || 'Dez/2027');
-  const [razaoSocial, setRazaoSocial] = useState(itemInicial?.razaoSocial || 'opea seguros');
+  const [previsaoTermino, setPrevisaoTermino] = useState(itemInicial?.previsaoTermino || '');
+  const [razaoSocial, setRazaoSocial] = useState(itemInicial?.razaoSocial || '');
   const [agendarParcelasAgora, setAgendarParcelasAgora] = useState(false);
   const [qtdAgendar, setQtdAgendar] = useState(12);
 

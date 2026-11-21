@@ -34,18 +34,21 @@ const formatMoney = (val, hide = false) => {
 };
 
 function parseDataBR(dataStr) {
-  const str = safeString(dataStr);
+  const str = safeString(dataStr).replace(/\s*\[AUTO\]/gi, '').trim();
   if (!str) return null;
   if (str.includes('-')) {
     const parts = str.split('T')[0].split('-');
     if (parts.length === 3) return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
   }
   if (str.includes('/')) {
-    const parts = str.split('/');
+    const parts = str.split(' ')[0].split('/');
     if (parts.length === 3) return new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
   }
   return null;
 }
+
+const isAutoMacro = (item) => safeString(item?.dados?.[12]).toUpperCase().includes('[AUTO]');
+const cleanDateStr = (val) => safeString(val).replace(/\s*\[AUTO\]/gi, '').trim();
 
 function formatDateToBR(dateObj) {
   if (!dateObj || isNaN(dateObj.getTime())) return '--/--/----';
@@ -233,22 +236,7 @@ export default function Dashboard() {
   });
 
   // Estados de Lugares Pré-Definidos (Regras Automáticas) e Dívidas Futuras / Contrato do Apartamento
-  const [regrasLugares, setRegrasLugares] = useState([
-    {
-      id: 'default_opea',
-      termo: 'opea seguros',
-      nomeExibicao: 'Parcela Apartamento (Opea)',
-      categoria: 'Imóvel / Obra',
-      tipoLancamento: 'Parcela Imóvel'
-    },
-    {
-      id: 'default_nelson',
-      termo: 'bar do nelson',
-      nomeExibicao: 'Bar do Nelson',
-      categoria: 'Fastfood',
-      tipoLancamento: 'Padrao'
-    }
-  ]);
+  const [regrasLugares, setRegrasLugares] = useState([]);
   const [dividasFuturas, setDividasFuturas] = useState([]);
   const [regraModalItem, setRegraModalItem] = useState(null);
   const [dividaModalItem, setDividaModalItem] = useState(null);
@@ -299,7 +287,10 @@ export default function Dashboard() {
       const rawRegras = localStorage.getItem('appfinance_regras_lugares');
       if (rawRegras) {
         const parsedRegras = JSON.parse(rawRegras);
-        if (Array.isArray(parsedRegras) && parsedRegras.length > 0) setRegrasLugares(parsedRegras);
+        if (Array.isArray(parsedRegras)) {
+          const limpas = parsedRegras.filter(r => !['default_opea', 'default_nelson', 'regra_opea', 'regra_nelson'].includes(r?.id));
+          setRegrasLugares(limpas);
+        }
       }
       const rawDividas = localStorage.getItem('appfinance_dividas_futuras');
       if (rawDividas) {
@@ -387,9 +378,10 @@ export default function Dashboard() {
         setSalarios(d.bdRendas || []);
         setHistoricoOrdens(d.DB_Historico_Ordens || []);
         processarBancos(d.meus_bancos || []);
-        if (Array.isArray(d.regras_lugares) && d.regras_lugares.length > 0) {
-          setRegrasLugares(d.regras_lugares);
-          try { localStorage.setItem('appfinance_regras_lugares', JSON.stringify(d.regras_lugares)); } catch (_) {}
+        if (Array.isArray(d.regras_lugares)) {
+          const limpas = d.regras_lugares.filter(r => !['default_opea', 'default_nelson', 'regra_opea', 'regra_nelson'].includes(r?.id));
+          setRegrasLugares(limpas);
+          try { localStorage.setItem('appfinance_regras_lugares', JSON.stringify(limpas)); } catch (_) {}
         }
         if (Array.isArray(d.dividas_futuras)) {
           setDividasFuturas(d.dividas_futuras);
@@ -944,6 +936,102 @@ export default function Dashboard() {
     return lista;
   }, [gastosCartao, devedores, mesAtual, anoAtual]);
 
+  // Histórico dos Últimos 6 Meses + Resumo Acumulado do Ano (Sugestão 4)
+  const { historico6Meses, resumoAnoAcumulado } = useMemo(() => {
+    const hist6 = [];
+    for (let offset = -5; offset <= 0; offset++) {
+      const dRef = new Date(anoAtual, mesAtual + offset, 1);
+      const m = dRef.getMonth();
+      const a = dRef.getFullYear();
+
+      let entradas = 0;
+      let saidas = 0;
+      let lucroPassivo = 0;
+
+      salarios.forEach(s => {
+        const d = parseDataBR(s.dados[5]);
+        if (d && d.getMonth() === m && d.getFullYear() === a) {
+          entradas += parseCurrency(s.dados[11]);
+        }
+      });
+
+      gastosCartao.forEach(g => {
+        const d = parseDataBR(g.dados[5]);
+        if (d && d.getMonth() === m && d.getFullYear() === a) {
+          saidas += parseCurrency(g.dados[7]);
+        }
+      });
+
+      devedores.forEach(dev => {
+        if (isDividaAparte(dev)) return;
+        const d = parseDataBR(dev.dados[5]);
+        if (d && d.getMonth() === m && d.getFullYear() === a && safeString(dev.dados[9]) === 'Concluído') {
+          const v = parseCurrency(dev.dados[7]);
+          const j = parseCurrency(dev.dados[10]);
+          const luc = v * (j / 100);
+          entradas += luc;
+          lucroPassivo += luc;
+        }
+      });
+
+      historicoOrdens.forEach(o => {
+        const d = parseDataBR(o.dados[5]);
+        if (d && d.getMonth() === m && d.getFullYear() === a && safeString(o.dados[7]).toUpperCase().includes('PROVENTO')) {
+          const val = parseCurrency(o.dados[8]) * parseCurrency(o.dados[9]);
+          entradas += val;
+          lucroPassivo += val;
+        }
+      });
+
+      hist6.push({
+        label: mesesCurtos[m],
+        entradas: Number(entradas.toFixed(2)),
+        saidas: Number(saidas.toFixed(2)),
+        lucroPassivo: Number(lucroPassivo.toFixed(2))
+      });
+    }
+
+    let salariosAno = 0;
+    let rendaPassivaAno = 0;
+    let gastosAno = 0;
+
+    salarios.forEach(s => {
+      const d = parseDataBR(s.dados[5]);
+      if (d && d.getFullYear() === anoAtual) salariosAno += parseCurrency(s.dados[11]);
+    });
+
+    gastosCartao.forEach(g => {
+      const d = parseDataBR(g.dados[5]);
+      if (d && d.getFullYear() === anoAtual) gastosAno += parseCurrency(g.dados[7]);
+    });
+
+    devedores.forEach(dev => {
+      if (isDividaAparte(dev)) return;
+      const d = parseDataBR(dev.dados[5]);
+      if (d && d.getFullYear() === anoAtual && safeString(dev.dados[9]) === 'Concluído') {
+        const v = parseCurrency(dev.dados[7]);
+        const j = parseCurrency(dev.dados[10]);
+        rendaPassivaAno += v * (j / 100);
+      }
+    });
+
+    historicoOrdens.forEach(o => {
+      const d = parseDataBR(o.dados[5]);
+      if (d && d.getFullYear() === anoAtual && safeString(o.dados[7]).toUpperCase().includes('PROVENTO')) {
+        rendaPassivaAno += parseCurrency(o.dados[8]) * parseCurrency(o.dados[9]);
+      }
+    });
+
+    return {
+      historico6Meses: hist6,
+      resumoAnoAcumulado: {
+        salariosAno: Number(salariosAno.toFixed(2)),
+        rendaPassivaAno: Number(rendaPassivaAno.toFixed(2)),
+        gastosAno: Number(gastosAno.toFixed(2))
+      }
+    };
+  }, [salarios, gastosCartao, devedores, historicoOrdens, mesAtual, anoAtual]);
+
   // Tela de Carregamento Institucional
   if (isGlobalLoading) {
     return (
@@ -1208,6 +1296,7 @@ export default function Dashboard() {
       {regraModalItem && (
         <RegraLugarRapidaModal
           itemInicial={regraModalItem}
+          dividasFuturas={dividasFuturas}
           onClose={() => setRegraModalItem(null)}
           onSaveRegra={async (novaRegra) => {
             const listaSemDuplicata = regrasLugares.filter(
@@ -1449,6 +1538,8 @@ export default function Dashboard() {
             metaPatrimonio={metaPatrimonio}
             onEditarMeta={() => setIsMetaModalOpen(true)}
             projecaoFutura={projecaoFutura}
+            historico6Meses={historico6Meses}
+            resumoAnoAcumulado={resumoAnoAcumulado}
             notificacoesUrgentes={listaNotificacoes.slice(0, 3)}
             onAbrirNotificacoes={() => setIsNotifOpen(true)}
             onAtalho={(acao) => {
@@ -1483,17 +1574,18 @@ export default function Dashboard() {
             onDelete={l => setCustomDialog({ type: 'delete', aba: 'bdLancamentos', linha: l, message: 'Esta conta será removida permanentemente.' })}
             onStatusChange={(i, s) => handleGravarDados([i.dados[5], i.dados[6], i.dados[7], i.dados[8], i.dados[9], i.dados[10], s, i.dados[12]], 'bdLancamentos', i.linha)}
             dividasFuturas={dividasFuturas}
+            regrasLugares={regrasLugares}
             onNovaDividaFutura={(presetImovel = false) => {
               setDividaModalItem(
                 presetImovel
                   ? {
-                      nome: 'Entrada / Construtora Apartamento',
+                      nome: '',
                       ehImovel: true,
-                      razaoSocial: 'opea seguros',
-                      valorTotalContrato: '',
+                      razaoSocial: '',
+                      valorTotal: '',
                       valorJaPagoAntes: '',
-                      totalParcelas: 36,
-                      dataPrevistaFim: ''
+                      qtdParcelasTotal: 36,
+                      previsaoTermino: ''
                     }
                   : null
               );
@@ -1522,6 +1614,7 @@ export default function Dashboard() {
             ativosFixos={ativosFixos}
             liveCrypto={cryptoLivePrices}
             cdiMensal={cdiMensal}
+            caixaLivreMes={dadosCaixa.livre}
             hideValues={hideValues}
             onAbrirDetalhe={setCarteiraDetalhe}
             onNovoInvestimento={() => { setEditItem(null); setModalType('ativo'); setIsModalOpen(true); }}
@@ -1652,8 +1745,8 @@ export default function Dashboard() {
 // ==========================================
 function ResumoView({
   dadosCaixa, patrimonioGlobal, totalInvestido, totalRecebiveisRua,
-  metaPatrimonio, onEditarMeta, projecaoFutura, notificacoesUrgentes,
-  onAbrirNotificacoes, onAtalho, salarios, hist, mes, ano, hideValues, onEdit, onDelete
+  metaPatrimonio, onEditarMeta, projecaoFutura, historico6Meses = [], resumoAnoAcumulado,
+  notificacoesUrgentes, onAbrirNotificacoes, onAtalho, salarios, hist, mes, ano, hideValues, onEdit, onDelete
 }) {
   const filtrados = salarios.filter(s => {
     const d = parseDataBR(s.dados[5]);
@@ -1666,6 +1759,7 @@ function ResumoView({
 
   const percMeta = metaPatrimonio > 0 ? Math.min(100, Math.round((patrimonioGlobal / metaPatrimonio) * 100)) : 0;
   const percRendaComprometida = dadosCaixa.renda > 0 ? Math.round((dadosCaixa.saida / dadosCaixa.renda) * 100) : 0;
+  const maxHist6 = Math.max(1, ...historico6Meses.map(h => Math.max(h.entradas || 0, h.saidas || 0)));
 
   return (
     <div className="space-y-4">
@@ -1814,6 +1908,69 @@ function ResumoView({
           ))}
         </div>
       </div>
+
+      {/* Gráfico Comparativo dos Últimos 6 Meses + Acumulado do Ano (Sugestão 4) */}
+      <div className="bg-[#121318] border border-[#1f2128] rounded-2xl p-5 space-y-4">
+        <div className="flex justify-between items-center">
+          <div>
+            <span className="text-xs font-semibold text-zinc-200 block">Evolução dos Últimos 6 Meses</span>
+            <span className="text-[11px] text-zinc-500">Comparativo de Entradas vs. Saídas e Acumulado de {ano}</span>
+          </div>
+          <div className="flex items-center gap-2.5 text-[10px] font-medium">
+            <span className="flex items-center gap-1 text-emerald-400"><span className="w-2 h-2 rounded-full bg-emerald-500" /> Entradas</span>
+            <span className="flex items-center gap-1 text-rose-400"><span className="w-2 h-2 rounded-full bg-rose-500" /> Saídas</span>
+          </div>
+        </div>
+
+        {/* Gráfico de Barras Vertical 6 Meses */}
+        <div className="grid grid-cols-6 gap-2 pt-2 items-end h-28 bg-[#16181f] border border-[#1f2128] rounded-xl px-3 py-3">
+          {historico6Meses.map((h, idx) => {
+            const altEnt = Math.max(6, Math.round(((h.entradas || 0) / maxHist6) * 72));
+            const altSai = Math.max(6, Math.round(((h.saidas || 0) / maxHist6) * 72));
+            return (
+              <div key={idx} className="flex flex-col items-center gap-1.5">
+                <div className="flex items-end gap-1 h-[74px]">
+                  <div
+                    style={{ height: `${altEnt}px` }}
+                    className="w-2.5 rounded-t bg-emerald-500/85 transition-all"
+                    title={`Entradas ${h.label}: R$ ${formatMoney(h.entradas, hideValues)}`}
+                  />
+                  <div
+                    style={{ height: `${altSai}px` }}
+                    className="w-2.5 rounded-t bg-rose-500/85 transition-all"
+                    title={`Saídas ${h.label}: R$ ${formatMoney(h.saidas, hideValues)}`}
+                  />
+                </div>
+                <span className="text-[10px] font-medium text-zinc-400">{h.label}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Resumo do Ano Acumulado */}
+        {resumoAnoAcumulado && (
+          <div className="grid grid-cols-3 gap-2 pt-1 text-xs">
+            <div className="bg-[#16181f] p-2.5 rounded-xl border border-[#1f2128]">
+              <span className="text-[10px] text-zinc-400 block">Salários em {ano}</span>
+              <span className="font-semibold text-zinc-100 tabular-nums">
+                R$ {formatMoney(resumoAnoAcumulado.salariosAno, hideValues)}
+              </span>
+            </div>
+            <div className="bg-[#16181f] p-2.5 rounded-xl border border-[#1f2128]">
+              <span className="text-[10px] text-zinc-400 block">Juros & Div. {ano}</span>
+              <span className="font-semibold text-emerald-400 tabular-nums">
+                +R$ {formatMoney(resumoAnoAcumulado.rendaPassivaAno, hideValues)}
+              </span>
+            </div>
+            <div className="bg-[#16181f] p-2.5 rounded-xl border border-[#1f2128]">
+              <span className="text-[10px] text-zinc-400 block">Gastos em {ano}</span>
+              <span className="font-semibold text-rose-400 tabular-nums">
+                R$ {formatMoney(resumoAnoAcumulado.gastosAno, hideValues)}
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
       
       {/* Extrato de Entradas & Salários do Mês */}
       <div className="space-y-2.5">
@@ -1881,6 +2038,7 @@ function ContasFixasView({
   onDelete,
   onStatusChange,
   dividasFuturas = [],
+  regrasLugares = [],
   onNovaDividaFutura,
   onEditarDividaFutura,
   onExcluirDividaFutura,
@@ -1931,6 +2089,7 @@ function ContasFixasView({
       const pagoAntes = parseCurrency(div.valorJaPagoAntes);
       const termoRazao = safeString(div.razaoSocial).toLowerCase();
       const termoNome = safeString(div.nome).toLowerCase();
+      const regrasVinculadas = (regrasLugares || []).filter(r => r.dividaId && r.dividaId === div.id);
 
       let pagoNoApp = 0;
       let parcelasPagasNoApp = 0;
@@ -1945,17 +2104,25 @@ function ContasFixasView({
         // Juros de obra do banco NUNCA abatem o saldo devedor da construtora/contrato!
         if (isJurosDeObra(item)) return;
 
-        let pertenceAoContrato = false;
-        if (div.ehImovel) {
-          pertenceAoContrato =
-            tipo === 'PARCELA IMÓVEL' ||
-            tipo === 'PARCELA IMOVEL' ||
-            (isItemImovel(item) && !isJurosDeObra(item)) ||
-            (termoRazao && desc.includes(termoRazao));
-        } else {
-          pertenceAoContrato =
-            (termoRazao && desc.includes(termoRazao)) ||
-            (termoNome && desc.includes(termoNome));
+        const bateRegraVinculada = regrasVinculadas.some(r => {
+          const t = safeString(r.termo).toLowerCase();
+          const n = safeString(r.nomeExibicao).toLowerCase();
+          return (t && desc.includes(t)) || (n && desc.includes(n));
+        });
+
+        let pertenceAoContrato = bateRegraVinculada;
+        if (!pertenceAoContrato) {
+          if (div.ehImovel) {
+            pertenceAoContrato =
+              tipo === 'PARCELA IMÓVEL' ||
+              tipo === 'PARCELA IMOVEL' ||
+              (isItemImovel(item) && !isJurosDeObra(item)) ||
+              (termoRazao && desc.includes(termoRazao));
+          } else {
+            pertenceAoContrato =
+              (termoRazao && desc.includes(termoRazao)) ||
+              (termoNome && desc.includes(termoNome));
+          }
         }
 
         if (pertenceAoContrato) {
@@ -2128,7 +2295,7 @@ function ContasFixasView({
               Configure o valor total do Contrato do Apartamento (Construtora) ou outras dívidas futuras
             </p>
             <p className="text-[11px] text-zinc-500">
-              Ao vincular a razão social <strong className="text-emerald-400">&quot;opea seguros&quot;</strong>, cada pagamento via Pix ou Boleto abate o saldo devedor automaticamente!
+              Ao vincular a razão social que aparece na notificação do Pix ou Boleto da construtora/credor, cada pagamento abate o saldo devedor automaticamente!
             </p>
             <div className="flex justify-center gap-2 pt-1">
               <button
@@ -2294,7 +2461,14 @@ function ContasFixasView({
                     {imovel ? <Building2 size={18}/> : <Receipt size={18}/>}
                   </div>
                   <div>
-                    <p className="text-xs font-semibold text-zinc-100">{desc}</p>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <p className="text-xs font-semibold text-zinc-100">{desc}</p>
+                      {isAutoMacro(i) && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/15 border border-violet-500/30 text-violet-300 font-semibold">
+                          🤖 Auto
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[11px] text-zinc-500 mt-0.5">
                       {tipo} • Venc. {dVenc ? formatDateToBR(dVenc) : '--/--/----'} {categoria ? `• ${categoria}` : ''}
                     </p>
@@ -2345,30 +2519,77 @@ function ContasFixasView({
 // ==========================================
 // 3. ABA INVESTIR (CARTEIRA DE PATRIMÔNIO)
 // ==========================================
-function CarteiraView({ ativosVar, hist, ativosFixos, liveCrypto, cdiMensal, hideValues, onAbrirDetalhe, onNovoInvestimento }) {
+function CarteiraView({ ativosVar, hist, ativosFixos, liveCrypto, cdiMensal, caixaLivreMes = 0, hideValues, onAbrirDetalhe, onNovoInvestimento }) {
+  const [editandoMetas, setEditandoMetas] = useState(false);
+  const [metasAlocacao, setMetasAlocacao] = useState({ acoes: 30, fiis: 30, fixa: 30, cripto: 10 });
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('appfinance_metas_alocacao');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') setMetasAlocacao(prev => ({ ...prev, ...parsed }));
+      }
+    } catch (_) {}
+  }, []);
+
+  const salvarMetasAlocacao = (novas) => {
+    setMetasAlocacao(novas);
+    try { localStorage.setItem('appfinance_metas_alocacao', JSON.stringify(novas)); } catch (_) {}
+  };
+
   const acoes = ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('AÇÃO') || safeString(a.dados[1]).toUpperCase().includes('ACAO'));
   const fiis = ativosVar.filter(a => safeString(a.dados[1]).toUpperCase().includes('FII'));
   const criptoArr = consolidarCriptos(hist, liveCrypto);
 
-  const cValorMercado = (lista) => lista.reduce((acc, i) => acc + parseCurrency(i.dados[6]), 0); 
+  const cValorMercado = (lista) => lista.reduce((acc, i) => acc + parseCurrency(i.dados[6]), 0);
+  const cCustoTotal = (lista) => lista.reduce((acc, i) => acc + parseCurrency(i.dados[4]), 0);
+
   const valAcoes = cValorMercado(acoes);
+  const custoAcoes = cCustoTotal(acoes);
+  const rentAcoes = custoAcoes > 0 ? ((valAcoes - custoAcoes) / custoAcoes) * 100 : 0;
+
   const valFIIs = cValorMercado(fiis);
+  const custoFIIs = cCustoTotal(fiis);
+  const rentFIIs = custoFIIs > 0 ? ((valFIIs - custoFIIs) / custoFIIs) * 100 : 0;
+
   const valCripto = cValorMercado(criptoArr);
+  const custoCripto = cCustoTotal(criptoArr);
+  const rentCripto = custoCripto > 0 ? ((valCripto - custoCripto) / custoCripto) * 100 : 0;
 
   const provAcoes = acoes.reduce((acc, i) => acc + parseCurrency(i.dados[11]), 0); 
   const provFIIs = fiis.reduce((acc, i) => acc + parseCurrency(i.dados[11]), 0);
   const proventosVariavel = provAcoes + provFIIs;
   
   let rendimentoFixa = 0;
+  let custoFixa = 0;
   const totalFixa = ativosFixos.reduce((acc, i) => {
     const vA = parseCurrency(i.dados[8]);
+    custoFixa += vA;
     const rf = calcFixa(vA, parseCurrency(i.dados[9]), parseDataBR(i.dados[5]), i.dados[10] || 'CDB', cdiMensal);
     rendimentoFixa += (rf.liquido - vA);
     return acc + rf.liquido;
   }, 0);
+  const rentFixa = custoFixa > 0 ? (rendimentoFixa / custoFixa) * 100 : 0;
 
   const patrimonioTotal = valAcoes + valFIIs + valCripto + totalFixa;
+  const custoGlobalCarteira = custoAcoes + custoFIIs + custoCripto + custoFixa;
+  const rentGlobalCarteira = custoGlobalCarteira > 0 ? ((patrimonioTotal - custoGlobalCarteira) / custoGlobalCarteira) * 100 : 0;
   const pct = (v) => patrimonioTotal > 0 ? Math.round((v / patrimonioTotal) * 100) : 0;
+
+  // Assistente de Rebalanceamento ("Onde Investir Este Mês?")
+  const classesAnalise = [
+    { id: 'Ação', nome: 'Ações B3', atualVal: valAcoes, atualPct: pct(valAcoes), metaPct: Number(metasAlocacao.acoes) || 0, cor: 'text-blue-400' },
+    { id: 'FII', nome: 'Fundos Imobiliários', atualVal: valFIIs, atualPct: pct(valFIIs), metaPct: Number(metasAlocacao.fiis) || 0, cor: 'text-violet-400' },
+    { id: 'Renda Fixa', nome: 'Renda Fixa', atualVal: totalFixa, atualPct: pct(totalFixa), metaPct: Number(metasAlocacao.fixa) || 0, cor: 'text-emerald-400' },
+    { id: 'Cripto', nome: 'Criptoativos', atualVal: valCripto, atualPct: pct(valCripto), metaPct: Number(metasAlocacao.cripto) || 0, cor: 'text-amber-400' }
+  ].map(c => ({
+    ...c,
+    gapPct: c.metaPct - c.atualPct,
+    faltaReais: Math.max(0, ((c.metaPct / 100) * (patrimonioTotal + Math.max(0, caixaLivreMes))) - c.atualVal)
+  })).sort((a, b) => b.gapPct - a.gapPct);
+
+  const recomendada = classesAnalise[0];
 
   return (
     <div className="space-y-4">
@@ -2376,6 +2597,11 @@ function CarteiraView({ ativosVar, hist, ativosFixos, liveCrypto, cdiMensal, hid
         <div className="flex justify-between items-start mb-1">
           <span className="text-xs font-medium text-zinc-400">Patrimônio Investido</span>
           <div className="flex items-center gap-2">
+            {custoGlobalCarteira > 0 && (
+              <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-md ${rentGlobalCarteira >= 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
+                {rentGlobalCarteira >= 0 ? '+' : ''}{rentGlobalCarteira.toFixed(1)}%
+              </span>
+            )}
             <span className="text-[11px] font-medium text-zinc-400 bg-zinc-800/80 px-2 py-0.5 rounded-md">CDI: {(cdiMensal * 100).toFixed(2)}% a.m.</span>
             {Object.keys(liveCrypto).length > 0 && <Activity size={14} className="text-emerald-400" title="Cotações em Tempo Real" />}
           </div>
@@ -2411,11 +2637,79 @@ function CarteiraView({ ativosVar, hist, ativosFixos, liveCrypto, cdiMensal, hid
         </div>
       </div>
 
+      {/* Assistente Inteligente de Aporte ("Onde Investir Este Mês?" - Sugestão 3) */}
+      <div className="bg-[#121318] border border-[#1f2128] p-5 rounded-2xl space-y-3">
+        <div className="flex justify-between items-start gap-2">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+              <Target size={17} />
+            </div>
+            <div>
+              <h4 className="text-xs font-semibold text-zinc-100">Onde Investir Este Mês?</h4>
+              <p className="text-[11px] text-zinc-500">Assistente de rebalanceamento da carteira por metas</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setEditandoMetas(!editandoMetas)}
+            className="text-[11px] font-medium text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 px-2.5 py-1 rounded-lg"
+          >
+            {editandoMetas ? 'Fechar Metas' : 'Ajustar % Alvo'}
+          </button>
+        </div>
+
+        {editandoMetas && (
+          <div className="grid grid-cols-4 gap-2 bg-[#16181f] p-3 rounded-xl border border-[#222530]">
+            {[
+              { k: 'acoes', label: 'Ações %' },
+              { k: 'fiis', label: 'FIIs %' },
+              { k: 'fixa', label: 'R. Fixa %' },
+              { k: 'cripto', label: 'Cripto %' }
+            ].map(item => (
+              <div key={item.k}>
+                <label className="text-[10px] text-zinc-400 block mb-1">{item.label}</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={metasAlocacao[item.k]}
+                  onChange={e => salvarMetasAlocacao({ ...metasAlocacao, [item.k]: Number(e.target.value) || 0 })}
+                  className="w-full bg-[#121318] border border-[#272a34] rounded-lg p-1.5 text-xs font-semibold text-zinc-100 text-center"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {recomendada && (
+          <div className="bg-[#16181f] border border-[#222530] rounded-xl p-3.5 flex items-center justify-between gap-3">
+            <div>
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400 block">
+                🎯 Próximo Aporte Recomendado
+              </span>
+              <p className="text-xs font-semibold text-zinc-100 mt-0.5">
+                Priorizar <span className={recomendada.cor}>{recomendada.nome}</span> ({recomendada.atualPct}% atual vs. {recomendada.metaPct}% meta)
+              </p>
+              <p className="text-[11px] text-zinc-400 mt-0.5">
+                {recomendada.faltaReais > 0
+                  ? `Faltam aprox. R$ ${formatMoney(recomendada.faltaReais, hideValues)} para atingir o equilíbrio ideal.`
+                  : 'Sua carteira está equilibrada com a meta definida.'}
+              </p>
+            </div>
+            <button
+              onClick={() => onAbrirDetalhe(recomendada.id)}
+              className="bg-[#121318] hover:bg-zinc-800 border border-[#272a34] text-zinc-200 px-3 py-2 rounded-xl text-[11px] font-semibold shrink-0"
+            >
+              Ver Classe
+            </button>
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-2 gap-3">
-        <InfoCard title="Ações B3" qtd={acoes.length} val={valAcoes} hideValues={hideValues} dotColor="bg-blue-500" onClick={() => onAbrirDetalhe('Ação')} />
-        <InfoCard title="Fundos Imobiliários" qtd={fiis.length} val={valFIIs} hideValues={hideValues} dotColor="bg-violet-500" onClick={() => onAbrirDetalhe('FII')} />
-        <InfoCard title="Criptoativos" qtd={criptoArr.length} val={valCripto} hideValues={hideValues} dotColor="bg-amber-500" onClick={() => onAbrirDetalhe('Cripto')} />
-        <InfoCard title="Renda Fixa" qtd={ativosFixos.length} val={totalFixa} hideValues={hideValues} dotColor="bg-emerald-500" onClick={() => onAbrirDetalhe('Renda Fixa')} />
+        <InfoCard title="Ações B3" qtd={acoes.length} val={valAcoes} rentPct={rentAcoes} hasCost={custoAcoes > 0} hideValues={hideValues} dotColor="bg-blue-500" onClick={() => onAbrirDetalhe('Ação')} />
+        <InfoCard title="Fundos Imobiliários" qtd={fiis.length} val={valFIIs} rentPct={rentFIIs} hasCost={custoFIIs > 0} hideValues={hideValues} dotColor="bg-violet-500" onClick={() => onAbrirDetalhe('FII')} />
+        <InfoCard title="Criptoativos" qtd={criptoArr.length} val={valCripto} rentPct={rentCripto} hasCost={custoCripto > 0} hideValues={hideValues} dotColor="bg-amber-500" onClick={() => onAbrirDetalhe('Cripto')} />
+        <InfoCard title="Renda Fixa" qtd={ativosFixos.length} val={totalFixa} rentPct={rentFixa} hasCost={custoFixa > 0} hideValues={hideValues} dotColor="bg-emerald-500" onClick={() => onAbrirDetalhe('Renda Fixa')} />
       </div>
 
       <button
@@ -2456,12 +2750,18 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, liveCrypto, c
           const taxa = parseCurrency(i.dados[9]);
           const subTipo = i.dados[10] || 'CDB';
           const calc = calcFixa(vA, taxa, dataApp, subTipo, cdiMensal);
+          const rentLiquidaPct = vA > 0 ? ((calc.liquido - vA) / vA) * 100 : 0;
           
           return (
             <div key={idx} className="p-5 bg-[#121318] border border-[#1f2128] rounded-2xl">
               <div className="flex justify-between items-start mb-3">
                 <div>
-                  <p className="font-semibold text-sm text-zinc-100">{nome}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-semibold text-sm text-zinc-100">{nome}</p>
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400">
+                      +{rentLiquidaPct.toFixed(2)}% líq.
+                    </span>
+                  </div>
                   <p className="text-[11px] text-zinc-400 mt-0.5">
                     {subTipo} • {taxa}{taxa > 20 ? '% do CDI' : '% a.m.'} • {calc.irRate === 0 ? 'Isento de IR' : `Alíquota IR ${(calc.irRate * 100).toFixed(1)}%`}
                   </p>
@@ -2494,6 +2794,7 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, liveCrypto, c
         const custoTotal = parseCurrency(i.dados[4]);
         const valorMercado = parseCurrency(i.dados[6]); 
         const lucroAbs = parseCurrency(i.dados[7]);
+        const rentAtivoPct = custoTotal > 0 ? (lucroAbs / custoTotal) * 100 : 0;
         const provento = parseCurrency(i.dados[11]);
         const dataProv = safeString(i.dados[12]); 
 
@@ -2501,8 +2802,13 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, liveCrypto, c
           <div key={idx} className="p-5 bg-[#121318] border border-[#1f2128] rounded-2xl">
             <div className="flex justify-between items-start mb-3">
               <div>
-                <p className="font-semibold text-sm text-zinc-100">{ticker}</p>
-                <p className="text-[11px] text-zinc-400">Quantidade: {qtd} • Preço Médio: R$ {formatMoney(precoMedio, hideValues)}</p>
+                <div className="flex items-center gap-2">
+                  <p className="font-semibold text-sm text-zinc-100">{ticker}</p>
+                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-md ${rentAtivoPct >= 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
+                    {rentAtivoPct >= 0 ? '+' : ''}{rentAtivoPct.toFixed(2)}%
+                  </span>
+                </div>
+                <p className="text-[11px] text-zinc-400 mt-0.5">Quantidade: {qtd} • Preço Médio: R$ {formatMoney(precoMedio, hideValues)}</p>
               </div>
               <button onClick={() => onEdit(i, 'resgate', tipo)} className="bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-lg text-emerald-400 text-[11px] font-medium flex items-center gap-1.5">
                 <HandCoins size={14}/> Vender
@@ -2511,7 +2817,12 @@ function CarteiraDetalheView({ tipo, ativosVar, hist, ativosFixos, liveCrypto, c
             <div className="grid grid-cols-2 gap-3 border-t border-[#1f2128] pt-3 text-xs">
               <div><p className="text-[11px] text-zinc-500">Custo de Aquisição</p><p className="font-semibold text-zinc-300 tabular-nums">R$ {formatMoney(custoTotal, hideValues)}</p></div>
               <div className="text-right"><p className="text-[11px] text-zinc-500">Posição Atual</p><p className="font-bold text-zinc-100 tabular-nums">R$ {formatMoney(valorMercado, hideValues)}</p></div>
-              <div><p className="text-[11px] text-zinc-500">Resultado</p><p className={`font-semibold tabular-nums ${lucroAbs >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{lucroAbs >= 0 ? '+' : ''}R$ {formatMoney(lucroAbs, hideValues)}</p></div>
+              <div>
+                <p className="text-[11px] text-zinc-500">Resultado</p>
+                <p className={`font-semibold tabular-nums ${lucroAbs >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {lucroAbs >= 0 ? '+' : ''}R$ {formatMoney(lucroAbs, hideValues)} ({rentAtivoPct >= 0 ? '+' : ''}{rentAtivoPct.toFixed(1)}%)
+                </p>
+              </div>
               {tipo !== 'Cripto' && (
                 <div className="text-right"><p className="text-[11px] text-zinc-500">Proventos</p><p className="font-semibold text-zinc-200 tabular-nums">R$ {formatMoney(provento, hideValues)} ({dataProv || '--/--'})</p></div>
               )}
@@ -2783,6 +3094,62 @@ function ClienteDossieView({ nome, items, hideValues, onVoltar, onStatusChange, 
   const visiveisJuros = mostrarConcluidos ? filtradosJuros : filtradosJuros.filter(i => safeString(i.dados[9]) !== 'Concluído');
   const visiveisAparte = mostrarConcluidos ? filtradosAparte : filtradosAparte.filter(i => safeString(i.dados[9]) !== 'Concluído');
 
+  // Gerador de Extrato Completo do Cliente para WhatsApp (Sugestão 6)
+  const enviarExtratoCompletoWhatsApp = () => {
+    const linhasMsg = [`📋 *EXTRATO DETALHADO — ${nome.toUpperCase()}*`, ''];
+    let totalAbertoGeral = 0;
+
+    const ativosJuros = filtradosJuros.filter(i => safeString(i.dados[9]) !== 'Concluído');
+    if (ativosJuros.length > 0) {
+      linhasMsg.push('*1. Contratos Ativos (c/ Juros):*');
+      ativosJuros.forEach((i, idx) => {
+        const vO = parseCurrency(i.dados[7]);
+        const j = parseCurrency(i.dados[10]);
+        const tot = vO + (vO * (j / 100));
+        totalAbertoGeral += tot;
+        const dO = parseDataBR(i.dados[5]);
+        const dV = parseDataBR(i.dados[8]);
+        linhasMsg.push(
+          `• #${idx + 1}: Principal R$ ${formatMoney(vO)} (${j}%) → *Total: R$ ${formatMoney(tot)}* (Venc: ${dV ? formatDateToBR(dV) : '--/--/----'}${dO ? ` | Início: ${formatDateToBR(dO)}` : ''})`
+        );
+      });
+      linhasMsg.push('');
+    }
+
+    const ativosAparte = filtradosAparte.filter(i => safeString(i.dados[9]) !== 'Concluído');
+    if (ativosAparte.length > 0) {
+      linhasMsg.push('*2. Valores à Parte (0% Sem Juros):*');
+      ativosAparte.forEach((i) => {
+        const v = parseCurrency(i.dados[7]);
+        totalAbertoGeral += v;
+        const mot = getDescricaoAparte(i);
+        const dV = parseDataBR(i.dados[8]);
+        linhasMsg.push(`• ${mot}: *R$ ${formatMoney(v)}*${dV ? ` (Venc: ${formatDateToBR(dV)})` : ''}`);
+      });
+      linhasMsg.push('');
+    }
+
+    const quitados = todosDoCliente.filter(i => safeString(i.dados[9]) === 'Concluído');
+    if (quitados.length > 0) {
+      linhasMsg.push(`*Histórico já liquidado:* ${quitados.length} registro(s) concluído(s) (R$ ${formatMoney(tR)})`);
+      linhasMsg.push('');
+    }
+
+    linhasMsg.push(`💰 *TOTAL EM ABERTO ATUALIZADO: R$ ${formatMoney(totalAbertoGeral)}*`);
+
+    try {
+      const raw = localStorage.getItem('appfinance_settings');
+      if (raw) {
+        const cfg = JSON.parse(raw);
+        if (cfg.incluirPixWhatsApp !== false && cfg.chavePix) {
+          linhasMsg.push(`\n💳 *Chave Pix:* ${cfg.chavePix}`);
+        }
+      }
+    } catch (_) {}
+
+    window.open(`https://wa.me/?text=${encodeURIComponent(linhasMsg.join('\n'))}`, '_blank');
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
@@ -2793,14 +3160,23 @@ function ClienteDossieView({ nome, items, hideValues, onVoltar, onStatusChange, 
       </div>
       
       <div className="bg-[#121318] border border-[#1f2128] p-5 rounded-2xl">
-        <div className="flex justify-between items-center mb-4">
+        <div className="flex justify-between items-center mb-4 gap-2 flex-wrap">
           <h3 className="text-lg font-bold text-zinc-100">{nome}</h3>
-          <button
-            onClick={onNovaDividaAparte}
-            className="bg-[#181a20] border border-[#272a34] text-emerald-400 px-3 py-1.5 rounded-xl text-xs font-medium flex items-center gap-1.5"
-          >
-            <Plus size={14}/> Dívida à Parte (0%)
-          </button>
+          <div className="flex gap-1.5">
+            <button
+              onClick={enviarExtratoCompletoWhatsApp}
+              className="bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/30 text-emerald-400 px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5"
+              title="Gerar extrato completo do cliente para enviar no WhatsApp"
+            >
+              <MessageCircle size={14}/> Extrato WhatsApp
+            </button>
+            <button
+              onClick={onNovaDividaAparte}
+              className="bg-[#181a20] border border-[#272a34] text-zinc-200 px-3 py-1.5 rounded-xl text-xs font-medium flex items-center gap-1"
+            >
+              <Plus size={14}/> Dívida 0%
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-3 gap-2 border-t border-[#1f2128] pt-3 text-xs">
           <div><p className="text-[11px] text-zinc-500">Principal Ativo</p><p className="font-semibold text-zinc-100 tabular-nums">R$ {formatMoney(tE, hideValues)}</p></div>
@@ -3063,7 +3439,8 @@ function CartoesView({ items, rendaMes, tetoCartao, hideValues, onNovoGastoCarta
                 {cartoesPorBanco[banco].items.map((i, idx) => {
                   const isPago = safeString(i.dados[11]).toUpperCase() === 'PAGO';
                   const isFixo = safeString(i.dados[6]).toUpperCase() === 'FIXO';
-                  const dCompraStr = safeString(i.dados[12]);
+                  const dCompraStr = cleanDateStr(i.dados[12]);
+                  const autoMacro = isAutoMacro(i);
 
                   return (
                     <div key={idx} className={`p-4 flex justify-between items-center ${isPago ? 'opacity-60' : ''}`}>
@@ -3072,7 +3449,14 @@ function CartoesView({ items, rendaMes, tetoCartao, hideValues, onNovoGastoCarta
                           <CreditCard size={16}/>
                         </div>
                         <div>
-                          <p className="text-xs font-semibold text-zinc-100">{i.dados[8]}</p>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <p className="text-xs font-semibold text-zinc-100">{i.dados[8]}</p>
+                            {autoMacro && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/15 border border-violet-500/30 text-violet-300 font-semibold">
+                                🤖 Auto
+                              </span>
+                            )}
+                          </div>
                           <p className="text-[11px] text-zinc-500">
                             {i.dados[9]} {dCompraStr ? `• ${dCompraStr}` : ''} {isFixo ? '• Recorrente' : ''}
                           </p>
@@ -4076,12 +4460,19 @@ function NavButton({ icon, label, active, onClick }) {
   );
 }
 
-function InfoCard({ title, qtd, val, hideValues, dotColor, onClick }) {
+function InfoCard({ title, qtd, val, rentPct = 0, hasCost = false, hideValues, dotColor, onClick }) {
   return (
     <div onClick={onClick} className="bg-[#121318] border border-[#1f2128] hover:border-zinc-700 p-4 rounded-2xl cursor-pointer active:scale-95 transition-all">
       <div className="flex items-center justify-between mb-2">
         <span className={`w-2 h-2 rounded-full ${dotColor}`} />
-        <span className="text-[10px] text-zinc-500 font-medium">{qtd} ativo(s)</span>
+        <div className="flex items-center gap-1.5">
+          {hasCost && (
+            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${rentPct >= 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
+              {rentPct >= 0 ? '+' : ''}{rentPct.toFixed(1)}%
+            </span>
+          )}
+          <span className="text-[10px] text-zinc-500 font-medium">{qtd} ativo(s)</span>
+        </div>
       </div>
       <p className="text-xs font-medium text-zinc-400 mb-0.5">{title}</p>
       <p className="text-base font-bold text-zinc-100 tabular-nums">R$ {formatMoney(val, hideValues)}</p>
