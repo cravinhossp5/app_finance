@@ -21,6 +21,12 @@ export async function POST(request) {
     });
 
     const data = await response.json();
+    if (typeof data?.texto_puro === 'string') {
+      return new Response(data.texto_puro, {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+      });
+    }
     return NextResponse.json(data);
 
   } catch (error) {
